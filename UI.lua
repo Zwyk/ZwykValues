@@ -5,6 +5,8 @@ local _, FW = ...
 local UI
 local refreshItemFilters
 local closeColorPicker
+local closeIconPicker
+local iconCatalog
 local ROW_HEIGHT = 30
 local unpack = unpack or table.unpack
 local finite = function(value)
@@ -129,18 +131,11 @@ local function previewColor(color)
     UI.colorSwatch:SetColorTexture(color.r, color.g, color.b, 1)
 end
 
-local function updateUnitHelp(profile)
-    local rating = profile and profile.secondaryUnit == "rating"
-    UI.percent:SetChecked(not rating)
-    UI.rating:SetChecked(rating)
-    if rating then
-        UI.unitHelp:SetText("Rating mode: secondary weights apply per 1 rating. Example: crit weight 10 x 7 rating = 70.")
-    else
-        UI.unitHelp:SetText("Percent mode: weights per 1 percentage point (1% = 1); defense per skill point. Crit weight 10 x 0.5% = 5.")
-    end
+local function updateUnitHelp()
+    UI.unitHelp:SetText("Secondary weights always use 1% (1% = 1); defense uses skill points.")
     for _, field in ipairs(UI.fields) do
         if field.secondary then
-            local unit = rating and "rating" or (field.key == "defense" and "skill" or "%")
+            local unit = field.key == "defense" and "skill" or "%"
             local name = field.key == "defense" and "Defense" or field.label
             field.text:SetText(name .. " (" .. unit .. ")")
         end
@@ -151,6 +146,9 @@ local function refreshEditor(force)
     local profile = selectedProfile()
     if UI.colorPickerSession and (not profile or UI.colorPickerSession.profile ~= profile) then
         closeColorPicker(true)
+    end
+    if UI.iconPickerSession and (not profile or UI.iconPickerSession.profile ~= profile) then
+        closeIconPicker()
     end
     local enabled = profile ~= nil
     for _, control in ipairs(UI.profileControls) do
@@ -167,6 +165,9 @@ local function refreshEditor(force)
         UI.active:SetChecked(profile.active and true or false)
         UI.main:SetChecked(FW.DB and FW.DB.options and FW.DB.options.mainProfileID == profile.id)
         previewColor(parseColor(UI.color:GetText()) or profile.color)
+        UI.profileIcon:SetTexture(profile.icon)
+        UI.profileIcon:SetShown(profile.icon ~= nil)
+        UI.iconNone:SetShown(profile.icon == nil)
         updateUnitHelp(profile)
         for _, field in ipairs(UI.fields) do
             setEnabled(field.box, true)
@@ -181,6 +182,8 @@ local function refreshEditor(force)
         UI.active:SetChecked(false)
         UI.main:SetChecked(false)
         previewColor()
+        UI.profileIcon:Hide()
+        UI.iconNone:Show()
         updateUnitHelp(nil)
         for _, field in ipairs(UI.fields) do
             field.box:SetText("0")
@@ -254,6 +257,7 @@ end
 local function showColorPicker()
     local profile = selectedProfile()
     if not profile then return end
+    closeIconPicker()
     closeColorPicker(true)
     local picker = ColorPickerFrame
     if not picker then
@@ -328,8 +332,168 @@ local function showColorPicker()
     end
 end
 
+-- These are the same spell/item catalogs used by Blizzard's IconDataProvider.
+-- Read them only when the picker opens, and reuse a small page of buttons.
+local function getIconCatalog()
+    if iconCatalog then return iconCatalog end
+    local values, result, seen = {}, {}, {}
+    for _, name in ipairs({ "GetLooseMacroIcons", "GetMacroIcons", "GetLooseMacroItemIcons", "GetMacroItemIcons" }) do
+        local enumerate = _G[name]
+        if type(enumerate) == "function" then
+            local found = {}
+            if pcall(enumerate, found) then
+                for _, value in ipairs(found) do values[#values + 1] = value end
+            end
+        end
+    end
+    for _, value in ipairs(values) do
+        if not issecretvalue or not issecretvalue(value) then
+            if type(value) == "string" then
+                value = tonumber(value) or (value:lower():match("^interface[\\/]") and value or ("Interface\\Icons\\" .. value))
+            end
+            local icon = FW:ValidateProfileIcon(value)
+            local key = type(icon) == "string" and icon:lower() or icon
+            if icon and not seen[key] then
+                seen[key] = true
+                result[#result + 1] = icon
+            end
+        end
+    end
+    if #result > 0 then iconCatalog = result end
+    return result
+end
+
+closeIconPicker = function()
+    if not UI then return end
+    UI.iconPickerSession = nil
+    if UI.iconDialog then UI.iconDialog:Hide() end
+end
+
+local function saveIcon(session, icon)
+    if UI.iconPickerSession ~= session or selectedProfile() ~= session.profile
+        or not FW.DB or not FW.DB.profiles or FW.DB.profiles[session.profile.id] ~= session.profile then return end
+    if commit({ icon = icon or false }, nil, icon and "Profile icon saved." or "Profile icon removed.") then closeIconPicker() end
+end
+
+local function refreshIconPage()
+    local dialog, session = UI.iconDialog, UI.iconPickerSession
+    if not dialog or not session then return end
+    local matches = session.matches
+    local pages = math.max(1, math.ceil(#matches / 48))
+    session.page = math.max(1, math.min(pages, session.page))
+    dialog.page:SetText(session.page .. " / " .. pages)
+    dialog.previous:SetEnabled(session.page > 1)
+    dialog.next:SetEnabled(session.page < pages)
+    for index, cell in ipairs(dialog.cells) do
+        local icon = matches[(session.page - 1) * 48 + index]
+        cell.iconValue = icon
+        cell.texture:SetTexture(icon)
+        cell.selected:SetShown(icon ~= nil and icon == session.profile.icon)
+        cell:SetShown(icon ~= nil)
+        cell:SetScript("OnClick", function() if icon then saveIcon(session, icon) end end)
+    end
+end
+
+local function filterIcons()
+    local session = UI.iconPickerSession
+    if not session then return end
+    local query = trim(UI.iconDialog.search:GetText()):lower()
+    session.matches, session.page = {}, 1
+    for _, icon in ipairs(session.catalog) do
+        if query == "" or tostring(icon):lower():find(query, 1, true) then
+            session.matches[#session.matches + 1] = icon
+        end
+    end
+    refreshIconPage()
+end
+
+local function createIconPicker()
+    local dialog = panel(UI.frame)
+    UI.iconDialog = dialog
+    dialog:SetSize(400, 390)
+    dialog:SetPoint("CENTER")
+    dialog:SetFrameStrata("DIALOG")
+    dialog:SetFrameLevel(UI.frame:GetFrameLevel() + 20)
+    dialog:EnableMouse(true)
+    backdrop(dialog, { 0.055, 0.065, 0.09, 1 })
+    dialog.title = label(dialog, "Profile icon", 15, { 1, 0.82, 0 })
+    dialog.title:SetPoint("TOPLEFT", 16, -16)
+    dialog.title:SetWidth(320)
+    dialog.title:SetWordWrap(false)
+    local close = CreateFrame("Button", nil, dialog, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -3, -3)
+    close:SetScript("OnClick", closeIconPicker)
+    label(dialog, "Name / ID", 11):SetPoint("TOPLEFT", 17, -53)
+    dialog.search = editBox(dialog, 285)
+    dialog.search:SetPoint("TOPLEFT", 85, -45)
+    dialog.search:SetScript("OnTextChanged", filterIcons)
+    dialog.search:SetScript("OnEscapePressed", closeIconPicker)
+    dialog.cells = {}
+    for index = 1, 48 do
+        local cell = CreateFrame("Button", nil, dialog)
+        cell:SetSize(38, 38)
+        cell:SetPoint("TOPLEFT", 26 + ((index - 1) % 8) * 44, -82 - math.floor((index - 1) / 8) * 44)
+        cell.texture = cell:CreateTexture(nil, "ARTWORK")
+        cell.texture:SetAllPoints()
+        cell:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
+        cell.selected = cell:CreateTexture(nil, "OVERLAY")
+        cell.selected:SetAllPoints()
+        cell.selected:SetTexture("Interface\\Buttons\\CheckButtonHilight")
+        cell.isProfileIconChoice = true
+        hint(cell, "Profile icon")
+        dialog.cells[index] = cell
+    end
+    dialog.none = button(dialog, "None", 65)
+    dialog.none:SetPoint("BOTTOMLEFT", 17, 14)
+    dialog.previous = button(dialog, "<", 40, function()
+        if UI.iconPickerSession then UI.iconPickerSession.page = UI.iconPickerSession.page - 1 refreshIconPage() end
+    end)
+    dialog.previous:SetPoint("BOTTOMLEFT", 100, 14)
+    dialog.page = label(dialog, "", 11)
+    dialog.page:SetPoint("LEFT", dialog.previous, "RIGHT", 6, 0)
+    dialog.page:SetWidth(76)
+    dialog.page:SetJustifyH("CENTER")
+    dialog.next = button(dialog, ">", 40, function()
+        if UI.iconPickerSession then UI.iconPickerSession.page = UI.iconPickerSession.page + 1 refreshIconPage() end
+    end)
+    dialog.next:SetPoint("LEFT", dialog.page, "RIGHT", 6, 0)
+    dialog.done = button(dialog, "Done", 65, closeIconPicker)
+    dialog.done:SetPoint("BOTTOMRIGHT", -17, 14)
+    dialog:EnableMouseWheel(true)
+    dialog:SetScript("OnMouseWheel", function(_, delta)
+        if UI.iconPickerSession then
+            UI.iconPickerSession.page = UI.iconPickerSession.page + (delta > 0 and -1 or 1)
+            refreshIconPage()
+        end
+    end)
+    dialog:SetScript("OnHide", function() UI.iconPickerSession = nil dialog.search:ClearFocus() end)
+    dialog:Hide()
+end
+
+local function showIconPicker()
+    local profile = selectedProfile()
+    if not profile then return end
+    closeColorPicker(true)
+    if UI.dialog then UI.dialog:Hide() end
+    if UI.filterDialog then UI.filterDialog:Hide() end
+    if not UI.iconDialog then createIconPicker() end
+    local catalog = getIconCatalog()
+    local session = { profile = profile, catalog = catalog, matches = catalog, page = 1 }
+    UI.iconPickerSession = session
+    UI.iconDialog.title:SetText("Icon for " .. (profile.name or "profile"))
+    UI.iconDialog.search:SetText("")
+    for index, icon in ipairs(catalog) do
+        if icon == profile.icon then session.page = math.floor((index - 1) / 48) + 1 break end
+    end
+    UI.iconDialog.none:SetScript("OnClick", function() saveIcon(session, nil) end)
+    refreshIconPage()
+    UI.iconDialog:Show()
+    if #catalog == 0 then status("The game's icon catalog is unavailable.", "error") end
+end
+
 local function selectProfile(id, reveal)
     closeColorPicker(true)
+    closeIconPicker()
     UI.selectedID = id
     UI.revealSelected = reveal
     refreshEditor(true)
@@ -489,6 +653,7 @@ local function createJSONDialog()
 end
 
 local function showJSON(mode)
+    closeIconPicker()
     if UI.filterDialog then UI.filterDialog:Hide() end
     if not UI.dialog then createJSONDialog() end
     local dialog = UI.dialog
@@ -497,7 +662,7 @@ local function showJSON(mode)
     dialog.message:SetText("")
     if mode == "import" then
         dialog.title:SetText("Import a weight profile")
-        dialog.help:SetText("Paste a Sixty Upgrades weights object, a ZwykValues profile, or a legacy ZwykPoints/ForeverWeights profile. A bare weights object uses percent mode; choose its unit after importing.")
+        dialog.help:SetText("Paste a Sixty Upgrades weights object, a ZwykValues profile, or a legacy ZwykPoints/ForeverWeights profile. Secondary weights always use percentage points; defense uses skill points.")
         dialog.nameLabel:Show()
         dialog.name:Show()
         dialog.name:SetText(uniqueName("Imported profile"))
@@ -510,8 +675,8 @@ local function showJSON(mode)
         if not text then status(err or "Could not export this profile.", "error") return end
         dialog.title:SetText(mode == "weights" and "Export weights only" or "Export a weight profile")
         dialog.help:SetText(mode == "weights"
-            and "Sixty Upgrades compatible keys. The weights-only JSON does not include this profile's name, color, visibility, unit or item filters. Press Ctrl+C to copy."
-            or "Includes all weights, name, color, stat units and item filters. Press Ctrl+C to copy this profile, then import it on another character or account.")
+            and "Sixty Upgrades compatible keys. The weights-only JSON does not include this profile's name, color, icon, visibility, unit or item filters. Press Ctrl+C to copy."
+            or "Includes all weights, name, color, icon, stat units and item filters. Press Ctrl+C to copy this profile, then import it on another character or account.")
         dialog.nameLabel:Hide()
         dialog.name:Hide()
         dialog.import:Hide()
@@ -551,6 +716,7 @@ end
 
 local function showItemFilters()
     if not selectedProfile() then return end
+    closeIconPicker()
     if UI.dialog then UI.dialog:Hide() end
     if not UI.filterDialog then
         local dialog = panel(UI.frame)
@@ -626,10 +792,14 @@ local function showItemFilters()
 end
 
 local statHints = {
-    hit = "The unified hit stat. Use a weight per 1 percentage point in percent mode, or per 1 rating in rating mode.",
-    crit = "The unified critical strike stat. Use a weight per 1 percentage point in percent mode, or per 1 rating in rating mode.",
-    haste = "Use a weight per 1 percentage point in percent mode, or per 1 rating in rating mode.",
-    expertise = "Use a weight per 1 percentage point of reduced dodge/parry chance in percent mode, or per 1 rating in rating mode.",
+    hit = "The unified hit stat. Weight per 1 percentage point (1% = 1).",
+    crit = "The unified critical strike stat. Weight per 1 percentage point (1% = 1).",
+    haste = "Weight per 1 percentage point (1% = 1).",
+    expertise = "Weight per 1 percentage point of reduced dodge/parry chance (1% = 1).",
+    dodge = "Weight per 1 percentage point of dodge chance (1% = 1).",
+    parry = "Weight per 1 percentage point of parry chance (1% = 1).",
+    block = "Weight per 1 percentage point of block chance (1% = 1).",
+    defense = "Weight per 1 defense skill point.",
     dps = "Melee weapon damage per second. It is scored separately from damage and weapon speed weights.",
     rangedDps = "Ranged weapon damage per second.",
     lowDamage = "The weapon's minimum damage. Combining multiple damage weights intentionally adds each contribution.",
@@ -755,6 +925,9 @@ local function createProfileRow(index)
     row.name:SetPoint("RIGHT", -5, 0)
     row.name:SetHeight(26)
     row.name:SetWordWrap(false)
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(20, 20)
+    row.icon:SetPoint("LEFT", 29, 0)
     row:SetScript("OnClick", function() selectProfile(row.profileID, false) end)
     row:SetScript("OnEnter", function(self)
         if row.profileName then
@@ -862,7 +1035,7 @@ local function createUI()
         hint(control, text .. " upgrade arrows", explanation .. " Requires a main profile. Each location can be enabled independently; changes apply immediately.")
         return control
     end
-    UI.upgradeBags = upgradeOption("In bags", 79, "upgradeBags", "Show an upgrade arrow on bag item icons.")
+    UI.upgradeBags = upgradeOption("Item windows", 79, "upgradeBags", "Show an upgrade arrow on item icons in bags, banks, trade and vendor windows, and the auction house.")
     UI.upgradeRolls = upgradeOption("Loot rolls", 103, "upgradeRolls", "Show an upgrade arrow on the item icon in native loot-roll windows.")
     UI.upgradeChat = upgradeOption("Chat item links", 127, "upgradeChat", "Show an arrow next to item links in newly received chat messages once item data is loaded. Existing messages keep their original display.")
 
@@ -920,34 +1093,33 @@ local function createUI()
     UI.colorSwatch:SetAllPoints()
     hint(UI.colorPicker, "Choose tooltip color", "Click to open the game's color picker. Changes save immediately; Cancel restores the previous color. Your unsaved weights and profile name are kept.")
     hint(UI.color, "Tooltip color", "Enter a six-digit hexadecimal color, for example #66CCFF. Click Set color to save it, or click the colored square to open the color picker.")
+    label(UI.right, "Icon", 11, { 0.76, 0.82, 0.9 }):SetPoint("LEFT", UI.colorPicker, "RIGHT", 13, 0)
+    UI.icon = CreateFrame("Button", nil, UI.right)
+    UI.icon:SetSize(24, 24)
+    UI.icon:SetPoint("LEFT", UI.colorPicker, "RIGHT", 45, 0)
+    UI.icon:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
+    UI.icon:SetScript("OnClick", showIconPicker)
+    UI.icon.isProfileIcon = true
+    UI.profileIcon = UI.icon:CreateTexture(nil, "ARTWORK")
+    UI.profileIcon:SetAllPoints()
+    UI.iconNone = label(UI.icon, "—", 17, { 0.65, 0.74, 0.85 })
+    UI.iconNone:SetPoint("CENTER")
+    hint(UI.icon, "Choose profile icon", "Choose an optional game icon. Select None to remove it. Changes save immediately and keep unsaved name, color and weights.")
 
-    label(UI.right, "Secondary units", 11, { 0.76, 0.82, 0.9 }):SetPoint("TOPLEFT", 15, -106)
-    local function unitButton(text, x, unit)
-        local control = CreateFrame("CheckButton", nil, UI.right, "UICheckButtonTemplate")
-        control:SetSize(25, 25)
-        control:SetPoint("TOPLEFT", x, -98)
-        label(control, text, 11, { 0.88, 0.91, 0.96 }):SetPoint("LEFT", control, "RIGHT", 1, 0)
-        control:SetScript("OnClick", function()
-            commit({ secondaryUnit = unit }, nil, "Secondary stat units saved. Check that your weights use the chosen unit.")
-        end)
-        return control
-    end
-    UI.percent = unitButton("Percent / skill", 132, "percent")
-    UI.rating = unitButton("Rating", 276, "rating")
     UI.itemFilters = button(UI.right, "Item filters", 100, showItemFilters)
     UI.itemFilters:SetPoint("TOPRIGHT", -15, -98)
     hint(UI.itemFilters, "Item filters for this profile", "Choose weapon types, armor types, and whether to include items restricted to other classes. These settings are separate for each profile and save immediately.")
     UI.unitHelp = label(UI.right, "", 10, { 0.65, 0.74, 0.85 })
-    UI.unitHelp:SetPoint("TOPLEFT", 15, -129)
-    UI.unitHelp:SetPoint("TOPRIGHT", -15, -129)
-    UI.unitHelp:SetHeight(28)
+    UI.unitHelp:SetPoint("TOPLEFT", 15, -103)
+    UI.unitHelp:SetPoint("TOPRIGHT", -130, -103)
+    UI.unitHelp:SetHeight(26)
     UI.unitHelp:SetJustifyV("TOP")
     UI.editorTitle = label(UI.right, "Weights", 12, { 1, 0.82, 0.35 })
-    UI.editorTitle:SetPoint("TOPLEFT", 15, -165)
-    UI.editorTitle:SetPoint("TOPRIGHT", -15, -165)
+    UI.editorTitle:SetPoint("TOPLEFT", 15, -139)
+    UI.editorTitle:SetPoint("TOPRIGHT", -15, -139)
     UI.editorTitle:SetHeight(20)
     UI.weightsScroll = CreateFrame("ScrollFrame", "ZwykValuesStatsScroll", UI.right, "UIPanelScrollFrameTemplate")
-    UI.weightsScroll:SetPoint("TOPLEFT", 12, -193)
+    UI.weightsScroll:SetPoint("TOPLEFT", 12, -167)
     UI.weightsScroll:SetPoint("BOTTOMRIGHT", -33, 51)
     UI.weightContent = CreateFrame("Frame", nil, UI.weightsScroll)
     UI.weightContent:SetSize(610, 1)
@@ -962,9 +1134,9 @@ local function createUI()
     UI.export:SetPoint("RIGHT", UI.import, "LEFT", -6, 0)
     UI.exportWeights = button(UI.right, "Weights JSON", 104, function() showJSON("weights") end)
     UI.exportWeights:SetPoint("RIGHT", UI.export, "LEFT", -6, 0)
-    hint(UI.export, "Export profile", "Exports the saved profile with its name, color, units and item filters. Apply edited weights before exporting.")
-    hint(UI.exportWeights, "Export weights", "Exports the saved weights using Sixty Upgrades keys. Name, color, unit and item filter metadata are omitted.")
-    UI.profileControls = { UI.name, UI.rename, UI.active, UI.main, UI.color, UI.colorButton, UI.colorPicker, UI.percent, UI.rating, UI.itemFilters, UI.apply }
+    hint(UI.export, "Export profile", "Exports the saved profile with its name, color, icon, units and item filters. Apply edited weights before exporting.")
+    hint(UI.exportWeights, "Export weights", "Exports the saved weights using Sixty Upgrades keys. Name, color, icon, unit and item filter metadata are omitted.")
+    UI.profileControls = { UI.name, UI.rename, UI.active, UI.main, UI.color, UI.colorButton, UI.colorPicker, UI.icon, UI.itemFilters, UI.apply }
     buildWeightFields()
 
     local note = label(frame, "Fixed weights ignore caps, procs, sets and rotations.", 10, { 0.66, 0.71, 0.79 })
@@ -1010,6 +1182,7 @@ local function createUI()
     end)
     frame:SetScript("OnHide", function()
         closeColorPicker(true)
+        closeIconPicker()
         if UI.dialog then UI.dialog:Hide() end
         if UI.filterDialog then UI.filterDialog:Hide() end
         UI.name:ClearFocus()
@@ -1039,6 +1212,11 @@ function FW:RefreshUI()
         local row = UI.rows[index] or createProfileRow(index)
         row.profileID, row.profileName, row.isActive = profile.id, profile.name, profile.active
         row.name:SetText(profile.name)
+        row.icon:SetTexture(profile.icon)
+        row.icon:SetShown(profile.icon ~= nil)
+        row.name:ClearAllPoints()
+        row.name:SetPoint("LEFT", profile.icon and 53 or 29, 0)
+        row.name:SetPoint("RIGHT", -5, 0)
         local color = profile.color or { r = 1, g = 1, b = 1 }
         row.name:SetTextColor(color.r, color.g, color.b)
         row.active:SetChecked(profile.active and true or false)
@@ -1083,6 +1261,12 @@ function FW:ToggleUI()
     if UI.frame:IsShown() then UI.frame:Hide() else UI.frame:Show() end
 end
 
+function FW:ShowUI()
+    if not UI then createUI() end
+    UI.frame:Show()
+    if UI.frame.Raise then UI.frame:Raise() end
+end
+
 function FW:InstallCharacterSheetButton()
     if self.characterSheetButton then return self.characterSheetButton end
     local slot = _G.CharacterTrinket1Slot
@@ -1099,6 +1283,7 @@ end
 
 function FW:ShowTextDialog(title, text, importMode)
     if not UI then createUI() end
+    closeIconPicker()
     if UI.filterDialog then UI.filterDialog:Hide() end
     UI.frame:Show()
     if importMode then

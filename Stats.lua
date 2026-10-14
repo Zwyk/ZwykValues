@@ -1,9 +1,8 @@
 local _, FW = ...
 
 -- Keep these keys compatible with the flat Sixty Upgrades weight JSON.
--- The secondary-stat unit is selected by the profile, not inferred from a
--- client version. Percentage weights mean one percentage point (defense is
--- one skill point); rating weights mean one raw item rating point.
+-- Secondary weights always mean one percentage point (defense uses one skill
+-- point). Native ratings remain diagnostic data, never a scoring fallback.
 FW.StatDefinitions = {
     { key = "strength", label = "Strength", group = "Attributes" },
     { key = "agility", label = "Agility", group = "Attributes" },
@@ -38,7 +37,7 @@ FW.StatDefinitions = {
     { key = "rangedAttackPower", label = "Ranged attack power", group = "Attack" },
     { key = "armor", label = "Base armor", group = "Defense" },
     { key = "armorBonus", label = "Bonus armor", group = "Defense" },
-    { key = "defense", label = "Defense (skill / rating)", group = "Secondary", secondary = true },
+    { key = "defense", label = "Defense", group = "Secondary", secondary = true },
     { key = "dodge", label = "Dodge", group = "Secondary", secondary = true },
     { key = "parry", label = "Parry", group = "Secondary", secondary = true },
     { key = "block", label = "Block chance", group = "Secondary", secondary = true },

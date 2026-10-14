@@ -1,7 +1,8 @@
 -- Run from the addon directory: luatex --luaonly tests/test_crit_units.lua
 -- The screenshot shows a 0.5% crit tooltip and a score of 81.35. Its raw API
 -- table was not supplied: 7 rating is the value inferred from that score.
--- These fixtures verify unit selection and caching, not live client conversion.
+-- Percentages now always drive scores. Raw ratings remain diagnostic data;
+-- this fixture checks their exclusion, legacy migration and comparison caches.
 local checks = 0
 local function equal(actual, expected, message)
     checks = checks + 1
@@ -67,14 +68,25 @@ function FW:ScoreStats(profile, stats)
     scoreCalls = scoreCalls + 1
     return scoreStats(self, profile, stats)
 end
-local profile = assert(FW:CreateProfile("Mageladin", {
+local weights = {
     agility = 0.01, armor = 0.05, armorBonus = 0.05, attackPower = 0.1,
     block = 0.01, blockValue = 0.1, blockValueBonus = 0.1, crit = 10,
     defense = 0.01, dodge = 0.01, dps = 1, expertise = 10, haste = 10, hit = 10,
     holyDamage = 1, intellect = 0.3, parry = 0.01, spellDamage = 1,
     spellPen = 0.1, spirit = 0.01, stamina = 0.01, strength = 0.2,
-}))
+}
+local profile, importError, warnings = FW:ImportProfile(assert(FW.JSON.Encode({
+    format = "ZwykValues", version = 1, name = "Mageladin",
+    secondaryUnit = "rating", weights = weights,
+})))
+assert(profile, importError)
+equal(profile.secondaryUnit, "percent", "legacy rating imports use percentages")
+equal(profile.weights.crit, 10, "legacy import preserves numeric weights")
+equal(#warnings, 1, "legacy rating import explains its normalization")
+local oldRevision = profile.revision
 assert(FW:UpdateProfile(profile.id, {secondaryUnit = "rating"}))
+equal(profile.secondaryUnit, "percent", "legacy rating update cannot select rating scoring")
+equal(profile.revision, oldRevision, "normalizing an already-percent profile does not change its score revision")
 assert(FW:SetMainProfile(profile.id))
 local score, item, detail = FW:GetScore(candidate, profile)
 equal(detail, nil)
@@ -83,37 +95,59 @@ equal(item.ratingStats.crit, 7, "generic, scoped and unsuffixed aliases count on
 equal(item.percentStats.crit, 0.5, "tooltip percentage stays separate from native rating")
 equal(item.percentStats.hit, nil, "critical strike does not supply hit chance")
 equal(item.stats.crit, nil)
-approx(score, 81.35, "rating mode: 11.35 static + 7 rating times 10")
-approx(FW:GetScore(candidate, profile), 81.35)
+approx(score, 16.35, "11.35 static + 0.5 percentage point times 10")
+approx(FW:GetScore(candidate, profile), 16.35)
 equal(reads, 1); equal(scans, 1); equal(scoreCalls, 1, "repeated score is cached")
 local comparison = assert(FW:CompareItem(candidate, profile))
 approx(comparison.comparisons[1].baseline, 20)
-approx(comparison.comparisons[1].delta, 61.35)
-equal(comparison.comparisons[1].status, "upgrade")
-equal(FW:IsMainProfileUpgrade(candidate), true)
-equal(FW:IsMainProfileUpgrade(candidate), true)
+approx(comparison.comparisons[1].delta, -3.65)
+equal(comparison.comparisons[1].status, "downgrade")
+equal(FW:IsMainProfileUpgrade(candidate), false)
+equal(FW:IsMainProfileUpgrade(candidate), false)
 equal(reads, 2); equal(scans, 2); equal(scoreCalls, 2)
 
--- Changing units retains the weight, invalidates only calculated totals and
--- refreshes the memoized upgrade decision without reading either item again.
-local oldRevision = profile.revision
-assert(FW:UpdateProfile(profile.id, {secondaryUnit = "percent"}))
+-- Seed SavedVariables and the upgrade memo as the prior rating-based version
+-- could have left them. Migration must reject that old 81.35 cached score.
+profile.secondaryUnit = "rating"
+FW.DB.cache.scores[item.key][profile.id] = {revision = oldRevision, score = 81.35}
+FW:InvalidateUpgradeComparisons()
+equal(FW:IsMainProfileUpgrade(candidate), true, "legacy cache establishes the stale upgrade decision")
+local saved = FW.DB
+FW.DB, ZwykValuesDB = nil, saved
+FW:Initialize()
+profile = FW.DB.profiles[profile.id]
+equal(profile.secondaryUnit, "percent", "SavedVariables migration normalizes rating profiles")
 equal(profile.revision, oldRevision + 1)
-equal(profile.weights.crit, 10, "unit changes never rewrite profile weights")
-equal((FW.DB.cache.scores[item.key] or {})[profile.id], nil)
-approx(FW:GetScore(candidate, profile), 16.35, "percentage mode: 11.35 static + 0.5 percentage point times 10")
+equal(profile.weights.crit, 10, "migration never rewrites numeric weights")
+approx(FW:GetScore(candidate, profile), 16.35, "migration invalidates the inflated rating score")
 comparison = assert(FW:CompareItem(candidate, profile))
 approx(comparison.comparisons[1].baseline, 20)
 approx(comparison.comparisons[1].delta, -3.65)
 equal(comparison.comparisons[1].status, "downgrade")
-equal(FW:IsMainProfileUpgrade(candidate), false, "previous rating-mode upgrade memo is invalidated")
+equal(FW:IsMainProfileUpgrade(candidate), false, "legacy upgrade memo is invalidated by the migrated revision")
 equal(FW:IsMainProfileUpgrade(candidate), false)
 equal(reads, 2); equal(scans, 2); equal(scoreCalls, 4)
 equal(FW.DB.cache.scores[item.key][profile.id].revision, profile.revision)
 equal(FW:GetIssueReport().itemCount, 0)
 
-assert(FW:UpdateProfile(profile.id, {secondaryUnit = "rating"}))
-approx(FW:GetScore(candidate, profile), 81.35)
-equal(FW:IsMainProfileUpgrade(candidate), true)
-equal(reads, 2); equal(scans, 2); equal(scoreCalls, 6)
+oldRevision = profile.revision
+FW.DB = nil
+FW:Initialize()
+equal(profile.revision, oldRevision, "reinitialization does not migrate the same profile twice")
+
+-- Native API ratings can change without changing the displayed percentage.
+-- They must never leak into the weighted value or establish an upgrade.
+for key in pairs(fixtures[candidate].raw) do
+    if key:find("CRIT", 1, true) then fixtures[candidate].raw[key] = 999 end
+end
+assert(FW:InvalidateItem(candidate))
+score, item, detail = FW:GetScore(candidate, profile)
+equal(item.ratingStats.crit, 999, "raw rating remains available for diagnostics")
+equal(item.percentStats.crit, 0.5)
+equal(detail, nil)
+approx(score, 16.35, "raw rating changes never alter percentage scoring")
+equal(FW:IsMainProfileUpgrade(candidate), false)
+equal(reads, 3); equal(scans, 3); equal(scoreCalls, 5)
+local exported = assert(FW.JSON.Decode(assert(FW:ExportProfile(profile.id))))
+equal(exported.secondaryUnit, "percent", "exports cannot reintroduce rating mode")
 print("Crit unit tests passed (" .. checks .. " checks)")

@@ -168,11 +168,16 @@ end
 local function hasIssues(record, profile)
     return record and ((FW.ItemHasIssues and FW:ItemHasIssues(record, profile)) or record.partial)
 end
+local function profileLabel(profile)
+    local icon = FW.ValidateProfileIcon and FW:ValidateProfileIcon(profile.icon)
+    if icon then return "|T" .. tostring(icon) .. ":14:14:0:0|t " .. profile.name end
+    return profile.name
+end
 local function activeSignature(profiles)
     local parts = {}
     for _, profile in ipairs(profiles) do
         parts[#parts+1] = table.concat({profile.id, profile.revision or 0,
-            profile.name, profile.color.r, profile.color.g, profile.color.b}, ":")
+            profile.name, profile.color.r, profile.color.g, profile.color.b, profile.icon or ""}, ":")
     end
     return table.concat(parts, ";") .. ":" .. tostring(FW.equipmentRevision or 0) ..
         ":" .. tostring(FW.DB.options and FW.DB.options.debugUnknownStats) ..
@@ -247,7 +252,7 @@ function FW:DecorateTooltip(tooltip, data)
             if result and result.excluded then return end
             if not addedSpacer then tooltip:AddLine(" "); addedSpacer = true end
             if not kind then displayedProfiles = displayedProfiles + 1 end
-            local label = kind and "  " .. kind or profile.name
+            local label = kind and "  " .. kind or profileLabel(profile)
             if result then
                 for _, item in ipairs(result.comparisons or {}) do
                     if item.error then notes[item.error] = true end

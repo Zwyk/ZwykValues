@@ -82,6 +82,13 @@ local function effect(stats)
         amount=100, duration=6, cooldown=120, uptime=.05, stats=stats or {strength=100},
         percentStats={}, ratingStats={}}
 end
+local function secondaryEffect(unit, amount)
+    local normalized = {text="Use: Critical strike +" .. amount .. (unit == "percent" and "%" or " rating") .. " for 6 sec. (2 Min Cooldown)",
+        index=3, amount=amount, duration=6, cooldown=120, uptime=.05,
+        stats={}, percentStats={}, ratingStats={}}
+    normalized[unit == "percent" and "percentStats" or "ratingStats"].crit = amount
+    return normalized
+end
 local profile = assert(FW:CreateProfile("Average", {strength=2, crit=10}))
 local second = assert(FW:CreateProfile("Negative", {strength=-1}))
 local full = fixture("item:100:8481", {stats={strength=20}, onUseStats={strength=5}, effects={effect()}})
@@ -112,7 +119,7 @@ equal(score, 45); equal(metadata.averageUseGain, 15, "weight revisions invalidat
 equal(reads[base.link], beforeReads, "weight changes reuse parsed effect amounts")
 assert(FW:UpdateProfile(profile.id, {weights={strength=2}}))
 
-local rating = fixture("item:101:0", {stats={strength=4}, onUseRatingStats={crit=12}, effects={effect({})}})
+local rating = fixture("item:101:0", {stats={strength=4}, onUseRatingStats={crit=12}, effects={secondaryEffect("rating",240)}})
 score, record, _, metadata = FW:GetAverageUseScore(rating.link, profile)
 equal(score, 8); equal(metadata.averageUseGain, 0)
 check(metadata.averageUseIncomplete, "rating amounts cannot silently become percentages")
@@ -121,26 +128,31 @@ check(not record.partial and not FW:ItemHasIssues(record, profile), "average uni
 equal(FW:GetScore(rating.link, profile), 8)
 assert(FW:UpdateProfile(profile.id, {secondaryUnit="rating"}))
 score, _, _, metadata = FW:GetAverageUseScore(rating.link, profile)
-equal(score, 128); equal(metadata.averageUseGain, 120)
-check(not metadata.averageUseIncomplete, "requested rating units recover at the new revision")
-local percentage = fixture("item:102:0", {onUsePercentStats={crit=.5}, effects={effect({})}})
+equal(profile.secondaryUnit, "percent", "legacy rating updates cannot select rating scoring")
+equal(score, 8); equal(metadata.averageUseGain, 0)
+check(metadata.averageUseIncomplete, "rating-only effects remain unavailable in percentage scoring")
+local percentage = fixture("item:102:0", {onUsePercentStats={crit=.5}, effects={secondaryEffect("percent",10)}})
 score, _, _, metadata = FW:GetAverageUseScore(percentage.link, profile)
-equal(score, 0); check(metadata.averageUseIncomplete)
-contains(table.concat(metadata.averageUseWarnings, " "), "rating points")
+equal(score, 5); equal(metadata.averageUseGain, 5)
+check(not metadata.averageUseIncomplete, "percentage effects always use the percentage weight")
+equal(#metadata.averageUseWarnings, 0)
 assert(FW:UpdateProfile(profile.id, {weights={crit=0}}))
-score, _, _, metadata = FW:GetAverageUseScore(percentage.link, profile)
-equal(score, 0); check(not metadata.averageUseIncomplete, "an unweighted missing unit does not make the average incomplete")
+score, _, _, metadata = FW:GetAverageUseScore(rating.link, profile)
+equal(score, 8); check(not metadata.averageUseIncomplete, "an unweighted missing percentage does not make the average incomplete")
 local defense = fixture("item:103:0", {onUsePercentStats={defense=2.5}, effects={effect({})}})
 local defenseProfile = assert(FW:CreateProfile("Defense skill", {defense=4}))
-equal(FW:GetAverageUseScore(defense.link, defenseProfile), 10, "percentage mode retains defense skill points")
+equal(FW:GetAverageUseScore(defense.link, defenseProfile), 10, "defense weights retain defense skill points")
 assert(FW:UpdateProfile(profile.id, {weights={crit=10}, secondaryUnit="percent"}))
 local mixedUnits = fixture("item:114:0", {onUsePercentStats={crit=.5}, onUseRatingStats={crit=12},
-    effects={effect({}), effect({})}})
+    effects={secondaryEffect("percent",10), secondaryEffect("rating",240)}})
 score, _, _, metadata = FW:GetAverageUseScore(mixedUnits.link, profile)
 equal(score, 5); check(metadata.averageUseIncomplete, "one readable effect cannot conceal another effect in the wrong unit")
 assert(FW:UpdateProfile(profile.id, {secondaryUnit="rating"}))
 score, _, _, metadata = FW:GetAverageUseScore(mixedUnits.link, profile)
-equal(score, 120); check(metadata.averageUseIncomplete, "the other unit also remains incomplete for mixed-unit effects")
+equal(profile.secondaryUnit, "percent")
+equal(score, 5); equal(metadata.averageUseGain, 5)
+check(metadata.averageUseIncomplete, "mixed effects retain only known percentages after a legacy rating update")
+contains(table.concat(metadata.averageUseWarnings, " "), "percentage points")
 assert(FW:UpdateProfile(profile.id, {secondaryUnit="percent"}))
 local temporaryArmor = fixture("item:116:0", {stats={armor=100}, onUseStats={armorBonus=10},
     effects={{amount=120,duration=10,cooldown=120,uptime=1/12,stats={armorBonus=120},percentStats={},ratingStats={}}}})

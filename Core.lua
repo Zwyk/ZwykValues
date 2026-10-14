@@ -212,9 +212,31 @@ local function validColor(color)
     return result
 end
 
+local function validIcon(icon)
+    if issecretvalue and issecretvalue(icon) then return nil, "Profile icon is unavailable." end
+    if icon == nil then return nil end
+    if finite(icon) and icon > 0 and icon <= 4294967295 and icon == math.floor(icon) then return icon end
+    if type(icon) == "string" and #icon <= 256 then
+        local path = icon:gsub("/", "\\")
+        local name = path:match("^[Ii][Nn][Tt][Ee][Rr][Ff][Aa][Cc][Ee]\\[Ii][Cc][Oo][Nn][Ss]\\(.+)$")
+        if name then
+            local stem, extension = name:match("^([%w_%-]+)%.([%a]+)$")
+            if name:match("^[%w_%-]+$") or (stem and (extension:lower() == "blp" or extension:lower() == "tga")) then
+                return "Interface\\Icons\\" .. name
+            end
+        end
+    end
+    return nil, "Profile icon must be a positive texture file ID or an Interface\\Icons\\ texture path."
+end
+
+function FW:ValidateProfileIcon(icon)
+    return validIcon(icon)
+end
+
 local function validUnit(unit)
-    if unit ~= "percent" and unit ~= "rating" then return nil, "Secondary stat unit must be 'percent' or 'rating'." end
-    return unit
+    if unit ~= "percent" and unit ~= "rating" then return nil, "Unsupported secondary stat unit." end
+    -- Retain compatibility with old profile envelopes without retaining rating mode.
+    return "percent"
 end
 
 local function blankCache()
@@ -288,9 +310,11 @@ function FW:Initialize()
         profile.id, profile.name, profile.weights = id, name, weights
         profile.active = profile.active ~= false
         profile.color = validColor(profile.color) or { r = defaultColor.r, g = defaultColor.g, b = defaultColor.b }
-        profile.secondaryUnit = validUnit(profile.secondaryUnit) or "percent"
+        profile.icon = validIcon(profile.icon)
         profile.itemFilters = cloneItemFilters(profile.itemFilters)
         profile.revision = finite(profile.revision) and math.max(1, math.floor(profile.revision)) or 1
+        if profile.secondaryUnit == "rating" then profile.revision = profile.revision + 1 end
+        profile.secondaryUnit = "percent"
         normalized[#normalized + 1], seen[id] = id, true
     end
     for _, id in ipairs(db.profileOrder) do restore(id, db.profiles[id]) end
@@ -410,9 +434,9 @@ function FW:UpdateProfile(id, changes)
     local profile = self.DB.profiles[id]
     if not profile then return nil, "Profile not found." end
     if not plainObject(changes) then return nil, "Profile changes must be a table." end
-    local allowed = { name = true, active = true, color = true, weights = true, secondaryUnit = true, itemFilters = true }
+    local allowed = { name = true, active = true, color = true, icon = true, weights = true, secondaryUnit = true, itemFilters = true }
     for key in pairs(changes) do if not allowed[key] then return nil, "Unknown profile field '" .. key .. "'." end end
-    local replacement, errorMessage = {}
+    local replacement, errorMessage = { secondaryUnit = "percent" }
     if changes.name ~= nil then
         replacement.name, errorMessage = validName(changes.name)
         if not replacement.name then return nil, errorMessage end
@@ -424,6 +448,10 @@ function FW:UpdateProfile(id, changes)
     if changes.color ~= nil then
         replacement.color, errorMessage = validColor(changes.color)
         if not replacement.color then return nil, errorMessage end
+    end
+    if changes.icon ~= nil and changes.icon ~= false then
+        replacement.icon, errorMessage = validIcon(changes.icon)
+        if not replacement.icon then return nil, errorMessage end
     end
     if changes.secondaryUnit ~= nil then
         replacement.secondaryUnit, errorMessage = validUnit(changes.secondaryUnit)
@@ -447,6 +475,7 @@ function FW:UpdateProfile(id, changes)
         for key, value in pairs(replacement.weights) do if value ~= profile.weights[key] then scoreChanged = true break end end
     end
     for key, value in pairs(replacement) do profile[key] = value end
+    if changes.icon == false then profile.icon = nil end
     if scoreChanged then
         profile.revision = profile.revision + 1
         clearProfileScores(self.DB, id)
@@ -485,7 +514,8 @@ function FW:CopyProfile(id)
     if not profile then return nil, errorMessage end
     profile.active = original.active
     profile.color = { r = original.color.r, g = original.color.g, b = original.color.b }
-    profile.secondaryUnit = original.secondaryUnit
+    profile.icon = original.icon
+    profile.secondaryUnit = "percent"
     profile.itemFilters = cloneItemFilters(original.itemFilters)
     self:NotifyChanged()
     return profile
@@ -496,10 +526,10 @@ function FW:ImportProfile(source, fallbackName)
     local decoded, errorMessage = self.JSON.Decode(source)
     if decoded == nil then return nil, errorMessage end
     if not plainObject(decoded) then return nil, "Import must be a weight object or a ZwykValues profile object." end
-    local weights, name, color, unit, filters
+    local weights, name, color, icon, unit, filters
     local warnings = {}
     if decoded.weights ~= nil or decoded.format ~= nil then
-        local allowed = { format = true, version = true, name = true, color = true, secondaryUnit = true, weights = true, itemFilters = true }
+        local allowed = { format = true, version = true, name = true, color = true, icon = true, secondaryUnit = true, weights = true, itemFilters = true }
         for key in pairs(decoded) do if not allowed[key] then return nil, "Unknown profile field '" .. key .. "'." end end
         if decoded.format ~= "ZwykValues" and decoded.format ~= "ZwykPoints" and decoded.format ~= "ForeverWeights" then
             return nil, "Profile format must be 'ZwykValues', 'ZwykPoints' or 'ForeverWeights'."
@@ -511,8 +541,15 @@ function FW:ImportProfile(source, fallbackName)
         if not name then return nil, errorMessage end
         color, errorMessage = validColor(decoded.color or defaultColor)
         if not color then return nil, errorMessage end
+        if decoded.icon ~= nil then
+            icon, errorMessage = validIcon(decoded.icon)
+            if not icon then return nil, errorMessage end
+        end
         unit, errorMessage = validUnit(decoded.secondaryUnit or "percent")
         if not unit then return nil, errorMessage end
+        if decoded.secondaryUnit == "rating" then
+            warnings[#warnings + 1] = "Legacy rating profile imported in percentage points; numeric weights are unchanged. Defense uses defense skill points."
+        end
         local importedFilters = decoded.itemFilters
         if importedFilters == nil then importedFilters = {} end
         filters, errorMessage = validItemFilters(importedFilters)
@@ -524,12 +561,12 @@ function FW:ImportProfile(source, fallbackName)
         if not name then return nil, errorMessage end
         color = { r = defaultColor.r, g = defaultColor.g, b = defaultColor.b }
         unit = "percent"
-        warnings[#warnings + 1] = "Bare weights use percentage points for secondary stats; defense uses defense skill points. Choose rating mode if these weights are per rating point."
+        warnings[#warnings + 1] = "Bare weights use percentage points for secondary stats; defense uses defense skill points."
     end
     local profile
     profile, errorMessage = self:CreateProfile(name, weights)
     if not profile then return nil, errorMessage end
-    profile.color, profile.secondaryUnit = color, unit
+    profile.color, profile.icon, profile.secondaryUnit = color, icon, unit
     if filters then profile.itemFilters = filters end
     self:NotifyChanged()
     return profile, nil, warnings
@@ -544,7 +581,8 @@ function FW:ExportProfile(id, bare)
     return self.JSON.Encode({
         format = "ZwykValues", version = 1, name = profile.name,
         color = { r = profile.color.r, g = profile.color.g, b = profile.color.b },
-        secondaryUnit = profile.secondaryUnit, weights = weights, itemFilters = cloneItemFilters(profile.itemFilters),
+        icon = profile.icon,
+        secondaryUnit = "percent", weights = weights, itemFilters = cloneItemFilters(profile.itemFilters),
     })
 end
 
@@ -711,17 +749,17 @@ function FW:GetScore(link, profile, ignoreFilters)
             scoreWarnings[#scoreWarnings + 1] = label .. " could not be read completely; its known value contributes to this subtotal."
         end
     end
-    local selected = profile.secondaryUnit == "rating" and record.ratingStats or record.percentStats
-    local other = profile.secondaryUnit == "rating" and record.percentStats or record.ratingStats
+    local selected = record.percentStats
+    local other = record.ratingStats
     selected, other = selected or {}, other or {}
     for key in pairs(secondaryKeys) do
         local value = selected[key]
         if value == nil then
             if (profile.weights[key] or 0) ~= 0 and (other[key] ~= nil or (record.unresolvedStats and record.unresolvedStats[key])) then
                 local label = self.StatByKey[key] and self.StatByKey[key].label or key
-                local unit = profile.secondaryUnit == "rating" and "rating points" or (key == "defense" and "defense skill points" or "percentage points")
+                local unit = key == "defense" and "defense skill points" or "percentage points"
                 missingStats[key] = true
-                scoreWarnings[#scoreWarnings + 1] = label .. " is unavailable in " .. unit .. "; its contribution is omitted. Check the profile's secondary stat unit."
+                scoreWarnings[#scoreWarnings + 1] = label .. " is unavailable in " .. unit .. "; its contribution is omitted."
             end
             value = 0
         end
@@ -732,10 +770,10 @@ function FW:GetScore(link, profile, ignoreFilters)
     table.sort(scoreWarnings)
     record.scoreIssues, record.profileScores = record.scoreIssues or {}, record.profileScores or {}
     local scorePartial = next(missingStats) ~= nil
-    record.scoreIssues[profile.id] = scorePartial and { name = profile.name, secondaryUnit = profile.secondaryUnit,
+    record.scoreIssues[profile.id] = scorePartial and { name = profile.name, secondaryUnit = "percent",
         revision = profile.revision, missingStats = missingStats, warnings = scoreWarnings } or nil
     record.profileScores[profile.id] = { name = profile.name, revision = profile.revision,
-        secondaryUnit = profile.secondaryUnit, score = score, partial = record.partial == true or scorePartial }
+        secondaryUnit = "percent", score = score, partial = record.partial == true or scorePartial }
     self:RecordItemIssue(record)
     -- A partially loaded tooltip may gain more stats on the next read. It must
     -- never become a persistent item/score entry merely because scoring ran.
@@ -781,17 +819,16 @@ function FW:GetAverageUseScore(link, profile, ignoreFilters)
         local reason = tostring(effect.reason or "effect could not be read reliably"):gsub("%.$", "")
         warnings[#warnings+1] = "On-use average unavailable: " .. reason .. "."
     end
-    local selected = profile.secondaryUnit == "rating" and record.onUseRatingStats or record.onUsePercentStats
-    local other = profile.secondaryUnit == "rating" and record.onUsePercentStats or record.onUseRatingStats
+    local selected = record.onUsePercentStats
+    local other = record.onUseRatingStats
     selected, other = selected or {}, other or {}
     for key in pairs(secondaryKeys) do
         stats[key] = selected[key] or 0
         if other[key] ~= nil and (profile.weights[key] or 0) ~= 0 then
             incomplete = true
             local label = self.StatByKey[key] and self.StatByKey[key].label or key
-            local unit = profile.secondaryUnit == "rating" and "rating points" or
-                (key == "defense" and "defense skill points" or "percentage points")
-            warnings[#warnings+1] = "On-use " .. label .. " is unavailable in " .. unit .. "; check the profile's secondary stat unit."
+            local unit = key == "defense" and "defense skill points" or "percentage points"
+            warnings[#warnings+1] = "On-use " .. label .. " is unavailable in " .. unit .. "; its contribution is omitted."
         end
     end
     local hasStats = next(record.onUseStats or {}) or next(record.onUsePercentStats or {}) or next(record.onUseRatingStats or {})

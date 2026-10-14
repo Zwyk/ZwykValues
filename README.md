@@ -1,4 +1,4 @@
-# ZwykValues 0.1.17
+# ZwykValues 0.1.18
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
@@ -7,7 +7,7 @@ A standalone stat-weight addon written from scratch for WoW Forever. No Pawn cod
 1. Close WoW or return to the character selection screen.
 2. Extract the `ZwykValues` folder into the Forever client's `Interface/AddOns` folder. The resulting path must be `Interface/AddOns/ZwykValues/ZwykValues.toc`.
 3. Enable **ZwykValues** in the AddOns list. If the current beta lists it as out of date, enable **Load out of date AddOns**.
-4. Log in and type `/zv`, or click the small **ZV** button beneath the bottom trinket slot on your character sheet.
+4. Log in and type `/zv`, click the small **ZV** button beneath the bottom trinket slot, or open **Options → AddOns → ZwykValues → Open ZwykValues**.
 
 For a GitHub download, choose **Code → Download ZIP** in the repository, extract it, rename the unpacked repository folder (for example, `ZwykValues-main`) to `ZwykValues`, and copy that folder into `Interface/AddOns`.
 
@@ -23,6 +23,8 @@ WoW stores each addon's SavedVariables in a file named after that addon, so rena
 
 Create, copy, rename, or delete profiles in the left column. Set an individual tooltip color and toggle **Active** for every profile you want shown. Multiple profiles can be active together. Click the color square to open the native color picker; selecting a color saves it for that profile, and **Cancel** restores its original color. The hexadecimal field and **Set color** remain available.
 
+An optional **Icon** beside the color controls opens a picker of the game's available macro icons. Choose an icon to show it before the profile name in the list and item tooltips, or choose **None** to remove it. Icon choices save immediately and remain part of copied profiles and full profile exports. Existing profiles start without an icon; icon changes keep your unsaved edits and cached item scores.
+
 Edit weights in the grouped stat editor and apply them. Positive, zero, negative, and fractional weights are supported. The initial **My profile** is empty: it contains no invented class or specialization weights.
 
 Each score is a linear sum:
@@ -31,7 +33,7 @@ Each score is a linear sum:
 
 For example, 20 Strength at weight 2 and 1% Crit at weight 10 give 50 points in a percentage profile. Stamina is not converted to health, Strength is not converted to attack power, and Agility is not converted to crit: enter weights that already account for their value for your character.
 
-Profiles are account-wide, including their active status, colors and item filters. All changes and the score cache are stored by WoW in the addon's `SavedVariables` on logout or `/reload`.
+Profiles are account-wide, including their active status, colors, icons and item filters. All changes and the score cache are stored by WoW in the addon's `SavedVariables` on logout or `/reload`.
 
 Click **Item filters** in a profile to choose its weapon and armor types independently. The scrollable dialog provides a checkbox for each supported client subtype, including shields, class relics and miscellaneous armor/accessories. All types start checked for both new and existing profiles. Changes save immediately and apply to the profile's full/base tooltip values and its main-profile upgrade arrows.
 
@@ -43,24 +45,24 @@ Copies and full profile exports preserve these choices. Bare weights JSON and ol
 
 The supplied Sixty Upgrades keys are preserved. **Import** accepts a bare JSON object of stat weights. Missing recognized keys become zero. Unknown keys and invalid numeric values are rejected with a message so typos cannot silently change a profile.
 
-**Export weights** produces the bare stat object. **Export profile** also preserves the profile name, color, secondary-stat unit and item filters. These metadata are lost when exporting only bare weights.
+**Export weights** produces the bare stat object. **Export profile** also preserves the profile name, color, icon and item filters. These metadata are lost when exporting only bare weights.
 
-Choose the unit explicitly:
+Secondary weights always use percentages; there is no rating mode:
 
-| Key or group | Default percentage profile | Rating profile |
-| --- | --- | --- |
-| `hit`, `crit`, `haste`, `expertise`, `dodge`, `parry`, `block` | Weight per percentage point; 1% means an amount of 1 | Weight per native rating point reported by the client |
-| `defense` | Weight per defense skill point, when explicitly available | Weight per native defense rating point |
-| Primary stats, AP, spell/healing power, armor, resistances, health | Weight per stat point | Same |
-| `hp5`, `mp5` | Weight per regeneration point per 5 seconds | Same |
-| `dps`, `rangedDps` | Weight per damage per second | Same |
-| `lowDamage`, `highDamage` | Weight per minimum/maximum weapon damage | Same |
-| `weaponDamage` | Weight per explicitly added flat weapon damage | Same |
-| `speed`, `rangedSpeed` | Weight per weapon swing second | Same |
+| Key or group | Unit |
+| --- | --- |
+| `hit`, `crit`, `haste`, `expertise`, `dodge`, `parry`, `block` | Weight per percentage point; 1% means an amount of 1 |
+| `defense` | Weight per defense skill point, when explicitly available |
+| Primary stats, AP, spell/healing power, armor, resistances, health | Weight per stat point |
+| `hp5`, `mp5` | Weight per regeneration point per 5 seconds |
+| `dps`, `rangedDps` | Weight per damage per second |
+| `lowDamage`, `highDamage` | Weight per minimum/maximum weapon damage |
+| `weaponDamage` | Weight per explicitly added flat weapon damage |
+| `speed`, `rangedSpeed` | Weight per weapon swing second |
 
-Merged melee/ranged/spell hit and crit aliases are counted once. The reader prefers explicit tooltip percentages for percentage profiles and keeps native API rating values separately. It does not apply an assumed rating conversion. If a needed stat or secondary-stat unit is unavailable, the item still shows the subtotal from known values, accompanied by a partial-data warning. Unavailable amounts contribute zero to that subtotal; an actually absent stat also contributes zero. Check the diagnostics before trusting a partial comparison.
+Merged melee/ranged/spell hit and crit aliases are counted once. The reader uses explicit tooltip percentages and keeps native API ratings separately for diagnostics. It does not apply an assumed rating conversion. If a needed percentage is unavailable, the item still shows the subtotal from known values, accompanied by a partial-data warning. Unavailable amounts contribute zero to that subtotal; an actually absent stat also contributes zero. Check the diagnostics before trusting a partial comparison.
 
-The editor labels each secondary weight with its selected unit. A crit weight of 10 means **10 points per 1%** in Percent mode, but **10 points per 1 rating** in Rating mode. For Manascale Treads, 157 armor at 0.05, 7 Strength at 0.2 and 7 Intellect at 0.3 contribute 11.35. Its 0.5% crit contributes 5 in Percent mode (total 16.35); with 7 native crit rating, Rating mode contributes 70 (total 81.35). Changing the unit keeps your numeric weights and recalculates scores; choose the unit those weights were intended to use.
+The editor labels each secondary weight with **%**, or **skill** for defense. A crit weight of 10 means **10 points per 1%**: 0.5% contributes 5. For Manascale Treads, 157 armor at 0.05, 7 Strength at 0.2 and 7 Intellect at 0.3 contribute 11.35, giving **16.35** with its crit chance. Version 0.1.18 switches saved rating profiles and imported legacy profiles to percentages, keeping numeric weights and recalculating old totals. Full exports retain `secondaryUnit: "percent"` for compatibility.
 
 Version 0.1.17 also fixes static wording such as `chance to critically hit with spells`: it counts as critical strike chance and does not add hit chance. Previously parsed item records refresh automatically.
 
@@ -110,17 +112,17 @@ In `/zv`, select a profile and check **Main for upgrade arrows** in the left-han
 
 Enable any of the three locations separately (all are off initially):
 
-- **In bags**: a green arrow at the upper-left corner of native carried-bag item icons, including combined bags.
+- **Item windows**: a green arrow on upgrade item icons in bags, banks, trade, vendor and auction-house windows.
 - **Loot rolls**: a green arrow on the item icon in native loot-roll windows.
 - **Chat item links**: an arrow immediately after item links in newly received chat messages.
 
 An arrow means the item scores higher than an equipped replacement under the main profile. Rings/trinkets need to beat at least one equipped slot; two-handed weapons use the combined main/off-hand score. Comparisons wait for main-hand compatibility where needed. Parsing or stat-unit issues suppress the affected upgrade decision, while tooltips retain their known subtotal and diagnostic warning.
 
-Bag/roll arrows refresh after item data loads, equipment changes (including enchants), bag changes, and profile/option edits. They clear when an icon is reused or a roll ends. Chat arrows are a snapshot when each message arrives: an uncached item link requests data and stays unmarked in that message; later messages can show its arrow once the data is available. Existing chat history is retained as originally displayed.
+Item-window and roll arrows refresh after item data loads, equipment changes (including enchants), item-window updates, and profile/option edits. They clear when an icon is reused or a roll ends. Chat arrows are a snapshot when each message arrives: an uncached item link requests data and stays unmarked in that message; later messages can show its arrow once the data is available. Existing chat history is retained as originally displayed.
 
 Version 0.1.13 fixes repeated hover work: only item-data completions the addon is waiting for invalidate comparisons and refresh icons; unrelated, duplicate and failed notifications do not redraw all bags. A refresh checks each icon once. Partial reads and subtotals share a bounded, unsaved one-second cache across profiles, Full/Base rows and equipped comparisons, and temporary loading decisions retry after expiry. Completed requests, equipment/enchant changes and cache clearing invalidate those reads immediately. Definitive exclusions reuse a false upgrade decision. Automatic metadata retries are throttled; explicit diagnostic refreshes remain available. These caches reduce repeated scans without turning incomplete data into permanently saved scores.
 
-Native Blizzard bags and loot-roll windows are supported. BetterBags 0.5.14 is also supported automatically, including its bank and list-row item icons; it uses the same **Bags** checkbox and main profile, with no additional provider selection. Its arrows update when equipment, profiles or item data change, and clear when a slot is reused. Empty slots and item-browser previews are excluded.
+Native Blizzard bag, bank, trade, vendor, auction-house and loot-roll windows are supported. Merchant purchase and buyback icons share the same upgrade check. BetterBags 0.5.14 is supported automatically, including its bank and list-row item icons; it uses the same **Item windows** checkbox and main profile. Arrows update when equipment, profiles or item data change, and clear when a slot is reused. Empty slots and item-browser previews are excluded.
 
 Other third-party bag addons can integrate their buttons explicitly with `ZwykValues:RegisterUpgradeItemButton(button, linkProvider)` and re-register after their own slot updates; `linkProvider(button)` must return the current full item link or nil.
 

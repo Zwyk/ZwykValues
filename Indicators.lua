@@ -1,9 +1,9 @@
 local _, FW = ...
 
--- Audited against Gethe/wow-ui-source's Forever UI (e3ecc27): the native
--- containers own pooled Items and UpdateItems/UpdateItemSlots; loot roll
--- frames own rollID and an IconFrame. No global frame-discovery walk is used.
-local buttons, containers, hookTargets = {}, {}, {}
+-- Audited against Gethe/wow-ui-source's Forever UI (735496d): containers,
+-- bank panels, trade and merchant windows expose their own live item slots.
+-- Only those known owners are visited; no global frame-discovery walk is used.
+local buttons, containers, hookTargets, owners, windows = {}, {}, {}, {}, {}
 local arrowTexture = "Interface\\AddOns\\ZwykValues\\Textures\\ArrowUp"
 local refreshPending = false
 local betterBagsItems = setmetatable({}, { __mode = "k" })
@@ -84,8 +84,41 @@ local function register(button, provider, option, owner, anchor, deferPaint)
         hookMethod(button, "SetBagID", function() hide(entry) end)
     end
     entry.provider, entry.option, entry.owner, entry.anchor = provider, option, owner, anchor
+    if usable(owner) and not owners[owner] and type(owner.HookScript) == "function" then
+        owners[owner] = true
+        pcall(owner.HookScript, owner, "OnHide", function()
+            for _, owned in pairs(buttons) do if owned.owner == owner then hide(owned) end end
+        end)
+    end
     if not deferPaint then paint(button, entry) end
     return entry
+end
+
+local function validIndex(value, minimum)
+    return not (issecretvalue and issecretvalue(value)) and type(value) == "number"
+        and value == math.floor(value) and value >= (minimum or 1)
+end
+
+local function containerLink(bag, slot)
+    if not validIndex(bag, -3) or not validIndex(slot) then return end
+    if C_Container and type(C_Container.GetContainerItemLink) == "function" then
+        return C_Container.GetContainerItemLink(bag, slot)
+    elseif type(GetContainerItemLink) == "function" then
+        return GetContainerItemLink(bag, slot)
+    end
+end
+
+local function isNativeBag(bag)
+    if not validIndex(bag, -3) then return false end
+    local lastBag = NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_TOTAL_BAG_FRAMES or NUM_BAG_SLOTS or 4
+    if bag >= 0 and bag <= lastBag + (NUM_BANKBAGSLOTS or NUM_BANK_BAG_SLOTS or 7) then return true end
+    if bag == (BANK_CONTAINER or -1) or bag == (REAGENTBANK_CONTAINER or -3) then return true end
+    -- Current bank tabs have client-defined container IDs, including account
+    -- storage. Compare explicit BagIndex constants rather than guessing ranges.
+    for name, id in pairs(Enum and Enum.BagIndex or {}) do
+        if type(name) == "string" and name:lower():find("bank", 1, true) and bag == id then return true end
+    end
+    return false
 end
 
 local function bagLink(button)
@@ -96,13 +129,7 @@ local function bagLink(button)
         if usable(parent) and type(parent.GetID) == "function" then bag = parent:GetID() end
     end
     local slot = type(button.GetID) == "function" and button:GetID()
-    local lastBag = NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_TOTAL_BAG_FRAMES or NUM_BAG_SLOTS or 4
-    if type(bag) ~= "number" or bag < 0 or bag > lastBag or type(slot) ~= "number" or slot < 1 then return end
-    if C_Container and type(C_Container.GetContainerItemLink) == "function" then
-        return C_Container.GetContainerItemLink(bag, slot)
-    elseif type(GetContainerItemLink) == "function" then
-        return GetContainerItemLink(bag, slot)
-    end
+    if isNativeBag(bag) then return containerLink(bag, slot) end
 end
 
 local function scanContainer(container, deferPaint)
@@ -177,6 +204,147 @@ local function hookGlobal(name, callback)
     if pcall(hooksecurefunc, name, callback) then globalHooks[name] = true end
 end
 
+local function watchWindow(frame, refresh)
+    if not usable(frame) or windows[frame] then return end
+    windows[frame] = true
+    if type(frame.HookScript) == "function" then
+        pcall(frame.HookScript, frame, "OnShow", refresh)
+    end
+end
+
+local function bankPanelLink(button)
+    if button.isInitialized == false or type(button.GetBankTabID) ~= "function" or
+        type(button.GetContainerSlotID) ~= "function" then return end
+    return containerLink(button:GetBankTabID(), button:GetContainerSlotID())
+end
+
+local function registerBankPanelButton(button, panel, deferPaint)
+    if not usable(button) then return end
+    local entry = register(button, bankPanelLink, "upgradeBags", BankFrame or panel, button.icon or button.Icon, deferPaint)
+    if not entry then return end
+    hookMethod(button, "SetBankTabID", function() hide(entry) end)
+    hookMethod(button, "SetContainerSlotID", function() hide(entry) end)
+    hookMethod(button, "Refresh", function() paint(button, entry) end)
+end
+
+local function legacyBankLink(button)
+    if button.isBag then return end
+    local parent = type(button.GetParent) == "function" and button:GetParent()
+    local bag = usable(parent) and type(parent.GetID) == "function" and parent:GetID()
+    local slot = type(button.GetID) == "function" and button:GetID()
+    if bag == (BANK_CONTAINER or -1) or bag == (REAGENTBANK_CONTAINER or -3) then
+        return containerLink(bag, slot)
+    end
+    if type(button.GetInventorySlot) == "function" and type(GetInventoryItemLink) == "function" then
+        local inventorySlot = button:GetInventorySlot()
+        if validIndex(inventorySlot) then return GetInventoryItemLink("player", inventorySlot) end
+    end
+end
+
+local function scanBank(deferPaint)
+    local frame = BankFrame
+    if not usable(frame) then return end
+    watchWindow(frame, function() scanBank() end)
+    local panel = frame.BankPanel or BankPanel
+    if usable(panel) then
+        watchWindow(panel, function() scanBank() end)
+        hookMethod(panel, "GenerateItemSlotsForSelectedTab", function() scanBank() end)
+        hookMethod(panel, "RefreshAllItemsForSelectedTab", function() scanBank() end)
+    end
+    if not enabled("upgradeBags") or not visible(frame) then return end
+    if usable(panel) and visible(panel) and type(panel.EnumerateValidItems) == "function" then
+        -- BankPanel's pool iterator yields button directly (unlike bags).
+        -- Existing buttons repaint in their native Refresh/OnShow hooks;
+        -- discovery only paints new buttons outside a shared refresh pass.
+        for button in panel:EnumerateValidItems() do
+            registerBankPanelButton(button, panel, deferPaint or buttons[button] ~= nil)
+        end
+    end
+    for index = 1, NUM_BANKGENERIC_SLOTS or 28 do
+        local button = _G["BankFrameItem" .. index] or (BankSlotsFrame and BankSlotsFrame["Item" .. index])
+        register(button, legacyBankLink, "upgradeBags", frame, button and (button.icon or button.Icon),
+            deferPaint or buttons[button] ~= nil)
+    end
+    local reagent = ReagentBankFrame
+    if usable(reagent) then
+        watchWindow(reagent, function() scanBank() end)
+        for index = 1, NUM_REAGENTBANKGENERIC_SLOTS or 98 do
+            local button = _G["ReagentBankFrameItem" .. index] or (reagent.ItemSlots and reagent.ItemSlots[index])
+            register(button, legacyBankLink, "upgradeBags", reagent, button and (button.icon or button.Icon),
+                deferPaint or buttons[button] ~= nil)
+        end
+    end
+end
+
+local function registerTradeItem(id, target, deferPaint)
+    if not validIndex(id) or id > (MAX_TRADE_ITEMS or 7) then return end
+    local button = _G[(target and "TradeRecipientItem" or "TradePlayerItem") .. id .. "ItemButton"]
+    register(button, function()
+        local provider = target and GetTradeTargetItemLink or GetTradePlayerItemLink
+        if type(provider) == "function" then return provider(id) end
+    end, "upgradeBags", TradeFrame, button and (button.icon or button.Icon), deferPaint)
+end
+
+local function scanTrade(deferPaint)
+    if not usable(TradeFrame) then return end
+    watchWindow(TradeFrame, function() scanTrade() end)
+    if not enabled("upgradeBags") or not visible(TradeFrame) then return end
+    for index = 1, MAX_TRADE_ITEMS or 7 do
+        registerTradeItem(index, false, deferPaint)
+        registerTradeItem(index, true, deferPaint)
+    end
+end
+
+local function merchantLink(button)
+    if not usable(MerchantFrame) then return end
+    local index = type(button.GetID) == "function" and button:GetID()
+    if not validIndex(index) then return end
+    if MerchantFrame.selectedTab == 1 then
+        if type(GetMerchantNumItems) == "function" and index > GetMerchantNumItems() then return end
+        if type(GetMerchantItemLink) == "function" then return GetMerchantItemLink(index) end
+    elseif MerchantFrame.selectedTab == 2 then
+        if type(GetNumBuybackItems) == "function" and index > GetNumBuybackItems() then return end
+        if type(GetBuybackItemLink) == "function" then return GetBuybackItemLink(index) end
+    end
+end
+
+local function latestBuybackLink()
+    if not usable(MerchantFrame) or MerchantFrame.selectedTab ~= 1 or
+        type(GetNumBuybackItems) ~= "function" or type(GetBuybackItemLink) ~= "function" then return end
+    local index = GetNumBuybackItems()
+    if validIndex(index) then return GetBuybackItemLink(index) end
+end
+
+local function scanMerchant(deferPaint)
+    if not usable(MerchantFrame) then return end
+    watchWindow(MerchantFrame, function() scanMerchant() end)
+    if not enabled("upgradeBags") or not visible(MerchantFrame) then return end
+    for index = 1, math.max(MERCHANT_ITEMS_PER_PAGE or 10, BUYBACK_ITEMS_PER_PAGE or 12) do
+        local button = _G["MerchantItem" .. index .. "ItemButton"]
+        register(button, merchantLink, "upgradeBags", MerchantFrame, button and (button.icon or button.Icon), deferPaint)
+    end
+    local button = MerchantBuyBackItemItemButton
+    register(button, latestBuybackLink, "upgradeBags", MerchantFrame, button and (button.icon or button.Icon), deferPaint)
+    -- MerchantRepairItemButton is an action control, not an item icon. Gear
+    -- keeps its ordinary bag arrows while that repair mode is active.
+end
+
+local function installItemWindowHooks()
+    scanBank(true); scanTrade(true); scanMerchant(true)
+    hookGlobal("BankFrameItemButton_Update", function(button)
+        if button and not button.isBag then
+            register(button, legacyBankLink, "upgradeBags", BankFrame, button.icon or button.Icon)
+        end
+    end)
+    hookGlobal("ReagentBankFrameItemButton_Update", function(button)
+        register(button, legacyBankLink, "upgradeBags", ReagentBankFrame, button and (button.icon or button.Icon))
+    end)
+    hookGlobal("TradeFrame_UpdatePlayerItem", function(id) registerTradeItem(id, false) end)
+    hookGlobal("TradeFrame_UpdateTargetItem", function(id) registerTradeItem(id, true) end)
+    hookGlobal("MerchantFrame_UpdateMerchantInfo", function() scanMerchant() end)
+    hookGlobal("MerchantFrame_UpdateBuybackInfo", function() scanMerchant() end)
+end
+
 local function installNativeHooks()
     visitNativeContainers(hookContainer)
     hookGlobal("ContainerFrame_Update", function(frame) hookContainer(frame); scanContainer(frame) end)
@@ -185,6 +353,7 @@ local function installNativeHooks()
     hookGlobal("GroupLootFrame_OnShow", function(frame) registerRollFrame(frame) end)
     hookGlobal("GroupLootContainer_OpenNewFrame", function() FW:RefreshUpgradeIndicators() end)
     for index = 1, 4 do registerRollFrame(_G["GroupLootFrame" .. index]) end
+    installItemWindowHooks()
 end
 
 local function betterBagsLink(item)
@@ -275,10 +444,11 @@ local function refreshBetterBags(deferPaint)
     for item in pairs(items.activeItems or {}) do visit(item) end
 end
 
-function FW:RegisterUpgradeItemButton(button, linkProvider)
-    -- Third-party bags can register their item buttons with a live provider
-    -- and call this again after their own updates. They share the bags toggle.
-    return register(button, linkProvider, "upgradeBags") ~= nil
+function FW:RegisterUpgradeItemButton(button, linkProvider, options)
+    -- Addon windows can supply a live provider, owner and icon anchor. Full
+    -- discovery passes defer painting until the shared registry paints once.
+    options = type(options) == "table" and options or {}
+    return register(button, linkProvider, "upgradeBags", options.owner, options.anchor, options.deferPaint) ~= nil
 end
 
 function FW:RefreshBagUpgradeIndicators()
@@ -287,6 +457,8 @@ function FW:RefreshBagUpgradeIndicators()
     refreshBetterBags(true)
     if enabled("upgradeBags") then
         visitNativeContainers(function(frame) hookContainer(frame); scanContainer(frame, true) end)
+        scanBank(true); scanTrade(true); scanMerchant(true)
+        if type(self.RefreshAuctionUpgradeIndicators) == "function" then self:RefreshAuctionUpgradeIndicators(true) end
     end
     for button, entry in pairs(buttons) do
         if entry.option == "upgradeBags" then paint(button, entry) end
@@ -353,6 +525,10 @@ function FW:InstallUpgradeIndicators()
         -- Bootstrap coordinates successful pending-item completions. Listening
         -- independently would redraw all bags for unsolicited cache events.
         "START_LOOT_ROLL", "CANCEL_LOOT_ROLL", "CANCEL_ALL_LOOT_ROLLS",
+        "BANKFRAME_OPENED", "BANKFRAME_CLOSED", "PLAYERBANKSLOTS_CHANGED", "PLAYERBANKBAGSLOTS_CHANGED",
+        "PLAYERREAGENTBANKSLOTS_CHANGED", "BANK_TABS_CHANGED", "BANK_TAB_SETTINGS_UPDATED",
+        "TRADE_SHOW", "TRADE_CLOSED", "TRADE_UPDATE", "TRADE_PLAYER_ITEM_CHANGED", "TRADE_TARGET_ITEM_CHANGED",
+        "MERCHANT_SHOW", "MERCHANT_CLOSED", "MERCHANT_UPDATE",
     }) do pcall(frame.RegisterEvent, frame, event) end
     installNativeHooks()
     self:RefreshUpgradeIndicators()

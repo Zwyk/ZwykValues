@@ -52,6 +52,7 @@ reset()
 local default = FW:GetProfiles()[1]
 equal(default.name, "My profile")
 equal(default.secondaryUnit, "percent")
+equal(default.icon, nil, "profiles start without an optional icon")
 equal(#FW:GetProfiles(true), 1)
 for _, definition in ipairs(FW.StatDefinitions) do equal(default.weights[definition.key], 0) end
 
@@ -72,6 +73,36 @@ equal(profile.name, before, "invalid updates are atomic")
 equal(FW:CreateProfile("Invalid", { strength = math.huge }), nil)
 equal(FW:UpdateProfile(profile.id, { color = { r = 2, g = 0, b = 0 } }), nil)
 
+-- Icons are display metadata: validate atomically and keep score revisions.
+local iconRevision = profile.revision
+assert(FW:UpdateProfile(profile.id, { icon = 135943 }))
+equal(profile.icon, 135943, "game texture file IDs are retained")
+equal(profile.revision, iconRevision, "icon edits keep cached scores valid")
+local secretIcon = {}
+issecretvalue = function(value) return value == secretIcon end
+equal(FW:ValidateProfileIcon(secretIcon), nil, "secret icon values are rejected before inspecting them")
+issecretvalue = nil
+assert(FW:UpdateProfile(profile.id, { icon = "interface/icons/INV_Misc_QuestionMark.blp" }))
+equal(profile.icon, "Interface\\Icons\\INV_Misc_QuestionMark.blp", "game icon paths are normalized")
+local iconPath = profile.icon
+local invalidIcons = {
+    0, -1, 1.5, math.huge, 4294967296, true, {}, json.null, "", "135943",
+    "INV_Misc_QuestionMark", "Interface\\AddOns\\Other\\Icon",
+    "Interface\\Icons\\..\\Other", "Interface\\Icons\\INV_Icon|cffffffff",
+    "Interface\\Icons\\INV_Icon.png", "Interface\\Icons\\" .. string.rep("A", 250),
+}
+for _, icon in ipairs(invalidIcons) do
+    local value, failure = FW:UpdateProfile(profile.id, { name = "Must not change", icon = icon })
+    equal(value, nil, "invalid icons are rejected")
+    contains(failure, "Profile icon")
+    equal(profile.icon, iconPath, "invalid updates preserve the icon")
+    equal(profile.name, "Renamed", "invalid icon updates preserve other fields")
+end
+assert(FW:UpdateProfile(profile.id, { icon = false }))
+equal(profile.icon, nil, "false clears an optional icon")
+equal(assert(json.Decode(assert(FW:ExportProfile(profile.id)))).icon, nil, "unset icons are omitted from profile exports")
+assert(FW:UpdateProfile(profile.id, { icon = 135943 }))
+
 local bare = assert(FW:ExportProfile(profile.id, true))
 local bareObject = assert(json.Decode(bare))
 local keyCount = 0
@@ -84,21 +115,34 @@ local imported, importError, warnings = FW:ImportProfile(bare, "Imported")
 check(imported, importError)
 equal(imported.weights.strength, 3)
 equal(imported.name, "Imported")
+equal(imported.icon, nil, "bare weights do not inherit display metadata")
 check(#warnings > 0, "bare imports explain unit assumptions")
 assert(FW:UpdateProfile(profile.id, { secondaryUnit = "rating", active = false }))
+equal(profile.secondaryUnit, "percent", "legacy update requests cannot enable rating mode")
 local envelope = assert(FW:ExportProfile(profile.id))
 equal(assert(json.Decode(envelope)).format, "ZwykValues", "new exports use the renamed format")
 local restored = assert(FW:ImportProfile(envelope))
 equal(restored.name, profile.name)
-equal(restored.secondaryUnit, "rating")
+equal(restored.secondaryUnit, "percent")
 equal(restored.color.r, 1)
+equal(restored.icon, 135943, "full profiles round-trip texture file IDs")
+local pathEnvelope = assert(json.Decode(envelope))
+pathEnvelope.icon = "Interface\\Icons\\Ability_Paladin_DivineStorm.tga"
+local pathImport = assert(FW:ImportProfile(assert(json.Encode(pathEnvelope))))
+equal(pathImport.icon, pathEnvelope.icon, "full profiles round-trip game icon paths")
+pathEnvelope.icon = nil
+equal(assert(FW:ImportProfile(assert(json.Encode(pathEnvelope)))).icon, nil, "old full profiles remain valid without an icon")
 for _, legacyFormat in ipairs({ "ZwykPoints", "ForeverWeights" }) do
     local legacyEnvelope = envelope:gsub('"format":"ZwykValues"', '"format":"' .. legacyFormat .. '"')
-    local legacy = assert(FW:ImportProfile(legacyEnvelope))
+    legacyEnvelope = legacyEnvelope:gsub('"secondaryUnit":"percent"', '"secondaryUnit":"rating"')
+    local legacy, _, legacyWarnings = FW:ImportProfile(legacyEnvelope)
+    check(legacy)
     equal(legacy.name, profile.name, "legacy profile names are preserved")
     equal(legacy.weights.strength, 3, "legacy profile weights are preserved")
-    equal(legacy.secondaryUnit, "rating", "legacy profile units are preserved")
+    equal(legacy.secondaryUnit, "percent", "legacy rating profiles import as percentages")
+    contains(table.concat(legacyWarnings, " "), "numeric weights are unchanged")
     equal(legacy.color.r, 1, "legacy profile colors are preserved")
+    equal(legacy.icon, 135943, "legacy format envelopes preserve optional icons")
     equal(assert(json.Decode(assert(FW:ExportProfile(legacy.id)))).format, "ZwykValues", "legacy imports re-export with the new format")
 end
 local empty = assert(FW:ImportProfile("{}", "Empty"))
@@ -107,6 +151,9 @@ local badImports = {
     '[]', 'null', 'false', '{"spellingMistake":1}', '{"strength":null}', '{"strength":"2"}',
     '{"format":"ZwykValues","version":2,"weights":{}}',
     '{"format":"ZwykValues","version":1,"weights":{},"secondaryUnit":"guessed"}',
+    '{"format":"ZwykValues","version":1,"weights":{},"icon":false}',
+    '{"format":"ZwykValues","version":1,"weights":{},"icon":null}',
+    '{"format":"ZwykValues","version":1,"weights":{},"icon":"Interface/Icons/../Other"}',
 }
 for _, source in ipairs(badImports) do
     local count = #FW:GetProfiles()
@@ -119,6 +166,9 @@ local copied = assert(FW:CopyProfile(profile.id))
 check(copied.id ~= profile.id)
 equal(copied.secondaryUnit, profile.secondaryUnit)
 equal(copied.active, false)
+equal(copied.icon, profile.icon, "profile copies preserve the optional icon")
+assert(FW:UpdateProfile(copied.id, { icon = false }))
+equal(profile.icon, 135943, "clearing a copy's icon preserves the original")
 copied.weights.strength = 123
 equal(profile.weights.strength, 3, "copies own their weight table")
 copied.color.g = 1
@@ -132,13 +182,18 @@ check(FW:ExportProfile(longCopy.id), "copying a long Unicode name does not split
 local legacyDB = FW.DB
 legacyDB.options.debugUnknownStats = true
 local legacyProfile = legacyDB.profiles[profile.id]
+legacyProfile.secondaryUnit = "rating"
+local legacyRevision = legacyProfile.revision
 ForeverWeightsDB, ZwykValuesDB, FW.DB = legacyDB, nil, nil
 FW:Initialize()
 check(FW.DB ~= legacyDB, "legacy migration creates an independent database")
 check(FW.DB.profiles[profile.id] ~= legacyProfile, "migrated profiles are independent")
 equal(FW.DB.profiles[profile.id].weights.strength, 3, "legacy migration preserves weights")
-equal(FW.DB.profiles[profile.id].secondaryUnit, "rating", "legacy migration preserves units")
+equal(FW.DB.profiles[profile.id].secondaryUnit, "percent", "legacy migration normalizes rating profiles")
+equal(FW.DB.profiles[profile.id].revision, legacyRevision + 1, "unit migration invalidates old rating totals")
+equal(legacyProfile.secondaryUnit, "rating", "legacy migration does not mutate the source database")
 equal(FW.DB.profiles[profile.id].active, false, "legacy migration preserves activation")
+equal(FW.DB.profiles[profile.id].icon, 135943, "legacy migration preserves valid icons")
 equal(FW.DB.options.debugUnknownStats, true, "legacy migration preserves options")
 assert(FW:UpdateProfile(profile.id, { weights = { strength = 42 }, color = { r = 0, g = 1, b = 0 } }))
 equal(legacyProfile.weights.strength, 3, "migrated edits do not modify the old weights")
@@ -161,6 +216,18 @@ equal(ZwykPointsDB.profiles[profile.id].weights.strength, 42, "migrated edits do
 FW.DB = nil
 FW:Initialize()
 equal(FW.DB.profiles[profile.id].weights.strength, 50, "existing ZwykValues takes precedence over both legacy databases")
+
+local savedProfiles = FW:GetProfiles()
+savedProfiles[1].icon = "interface/icons/INV_Misc_QuestionMark"
+savedProfiles[2].icon = "Interface\\AddOns\\Other\\Icon"
+savedProfiles[3].icon = false
+savedProfiles[4].icon = 0
+FW.DB = nil
+FW:Initialize()
+equal(savedProfiles[1].icon, "Interface\\Icons\\INV_Misc_QuestionMark", "saved game icon paths are normalized")
+equal(savedProfiles[2].icon, nil, "invalid saved icon paths are discarded")
+equal(savedProfiles[3].icon, nil, "legacy false icon fields become unset")
+equal(savedProfiles[4].icon, nil, "invalid saved numeric icons are discarded")
 
 reset()
 local records, itemReads, scoreCalls = {}, 0, 0
@@ -191,27 +258,43 @@ equal(itemReads, 1, "item cache is reused")
 assert(FW:UpdateProfile(weighted.id, { color = { r = 0, g = 1, b = 0 } }))
 equal(FW:GetScore("itemA", weighted), 18)
 equal(scoreCalls, 1, "color edits do not calculate another score")
+assert(FW:UpdateProfile(weighted.id, { icon = 135943 }))
+equal(FW:GetScore("itemA", weighted), 18)
+equal(scoreCalls, 1, "icon edits do not calculate another score")
+assert(FW:UpdateProfile(weighted.id, { icon = false }))
+equal(FW:GetScore("itemA", weighted), 18)
+equal(scoreCalls, 1, "clearing an icon does not calculate another score")
 assert(FW:UpdateProfile(weighted.id, { weights = { strength = 3 } }))
 equal(FW:GetScore("itemA", weighted), 22)
 equal(scoreCalls, 2, "weight edits invalidate score without reparsing item")
 equal(itemReads, 1)
 assert(FW:UpdateProfile(weighted.id, { secondaryUnit = "rating" }))
-equal(FW:GetScore("itemA", weighted), 132)
+equal(weighted.secondaryUnit, "percent", "rating updates retain percentage mode")
+equal(FW:GetScore("itemA", weighted), 22)
+weighted.secondaryUnit = "rating"
+FW.DB.cache.scores.itemA[weighted.id] = nil
+equal(FW:GetScore("itemA", weighted), 22, "scoring uses percentage points even if a caller mutates the profile field")
+equal(records.itemA.profileScores[weighted.id].secondaryUnit, "percent", "diagnostics describe the unit actually scored")
+assert(FW:UpdateProfile(weighted.id, { icon = 135943 }))
+equal(weighted.secondaryUnit, "percent", "display edits also normalize legacy profile fields")
 local second = assert(FW:CreateProfile("Second", { strength = 1 }))
 equal(FW:GetScore("itemA", second), 4)
-equal(FW.DB.cache.scores.itemA[weighted.id].score, 132)
+equal(FW:GetScore("itemA", weighted), 22)
+equal(FW.DB.cache.scores.itemA[weighted.id].score, 22)
 equal(FW.DB.cache.scores.itemA[second.id].score, 4, "scores are independent for each profile")
 
 records.noSecondary = { key = "noSecondary", stats = { strength = 2 }, percentStats = {}, ratingStats = {}, warnings = {} }
 equal(FW:GetScore("noSecondary", weighted), 6, "a stat absent from an item contributes zero")
 records.percentOnly = { key = "percentOnly", stats = {}, percentStats = { hit = 1 }, ratingStats = {}, warnings = {} }
-local unavailable, unavailableError = FW:GetScore("percentOnly", weighted)
+equal(FW:GetScore("percentOnly", weighted), 10, "percentage-only secondary stats are sufficient")
+records.ratingOnly = { key = "ratingOnly", stats = {}, percentStats = {}, ratingStats = { hit = 12 }, warnings = {} }
+local unavailable, unavailableError = FW:GetScore("ratingOnly", weighted)
 equal(unavailable, 0, "known subtotal is shown when the selected secondary unit is missing")
-contains(FW:ItemIssueSummary(unavailableError, weighted), "rating points")
+contains(FW:ItemIssueSummary(unavailableError, weighted), "percentage points")
 check(not unavailableError.partial, "a profile unit mismatch does not corrupt the parsed item record")
 check(FW:ItemHasIssues(unavailableError, weighted), "the affected profile receives a score-specific warning")
 check(not FW:ItemHasIssues(unavailableError, second), "an unweighted unit mismatch does not affect a different profile")
-equal(FW.DB.cache.scores.percentOnly, nil, "partial unit calculations are never cached")
+equal(FW.DB.cache.scores.ratingOnly, nil, "partial unit calculations are never cached")
 records.unresolved = { key = "unresolved", stats = {}, percentStats = {}, ratingStats = {}, unresolvedStats = { hit = true }, partial = true, warnings = { "Unknown hit unit" } }
 local unresolvedScore, unresolvedError = FW:GetScore("unresolved", weighted)
 equal(unresolvedScore, 0)
@@ -250,9 +333,12 @@ local unitFixProfile = assert(FW:CreateProfile("Fix units", { strength = 1, hit 
 equal(FW:GetScore("resolvedUnit", unitFixProfile), 2)
 check(FW.DB.itemIssues.resolvedUnit.scoreIssues[unitFixProfile.id], "missing percentage contribution is recorded")
 assert(FW:UpdateProfile(unitFixProfile.id, { secondaryUnit = "rating" }))
-equal(FW:GetScore("resolvedUnit", unitFixProfile), 26)
+equal(FW:GetScore("resolvedUnit", unitFixProfile), 2, "legacy requests never substitute rating values")
+check(FW.DB.itemIssues.resolvedUnit.scoreIssues[unitFixProfile.id], "rating-only values remain unavailable")
+records.resolvedUnit.percentStats.hit = 1
+equal(FW:GetScore("resolvedUnit", unitFixProfile), 4)
 equal(FW.DB.itemIssues.resolvedUnit.scoreIssues[unitFixProfile.id], nil, "recomputed successful unit selection removes the old profile warning")
-equal(FW.DB.itemIssues.resolvedUnit.profileScores[unitFixProfile.id].score, 26)
+equal(FW.DB.itemIssues.resolvedUnit.profileScores[unitFixProfile.id].score, 4)
 local missing, missingError = FW:GetScore("notLoaded", second)
 equal(missing, nil)
 contains(missingError, "loading")
@@ -261,13 +347,13 @@ local savedDB, readsBefore, callsBefore = FW.DB, itemReads, scoreCalls
 FW.DB = nil
 FW:Initialize()
 equal(FW.DB, savedDB)
-equal(FW:GetScore("itemA", weighted), 132)
+equal(FW:GetScore("itemA", weighted), 22)
 equal(scoreCalls, callsBefore, "persistent scores survive reinitialization")
 equal(itemReads, readsBefore)
 check(FW:InvalidateItem("itemA"))
 equal(FW.DB.cache.items.itemA, nil)
 equal(FW.DB.cache.scores.itemA, nil)
-equal(FW:GetScore("itemA", weighted), 132)
+equal(FW:GetScore("itemA", weighted), 22)
 equal(itemReads, readsBefore + 1)
 FW:InvalidateCache()
 equal(FW:GetCacheCount(), 0)

@@ -147,8 +147,11 @@ verdicts["item:102"] = true
 combined:UpdateItemSlots(); assert(pooled.zvUpgradeArrow.shown)
 combined:Hide(); assert(not pooled.zvUpgradeArrow.shown)
 combined:Show(); assert(pooled.zvUpgradeArrow.shown)
--- Bank bag reuse does not accidentally mark bank content as a carried item.
-legacy.id = 7; ContainerFrame_Update(legacy); assert(not legacyItem.zvUpgradeArrow.shown)
+-- Bank bags share the item-window toggle and read their own current slots.
+inventory[7], verdicts["item:107"] = {"item:107"}, true
+legacy.id = 7; ContainerFrame_Update(legacy); assert(legacyItem.zvUpgradeArrow.shown)
+inventory[7][1] = nil; ContainerFrame_Update(legacy); assert(not legacyItem.zvUpgradeArrow.shown)
+legacy.id = 99; ContainerFrame_Update(legacy); assert(not legacyItem.zvUpgradeArrow.shown)
 legacy.id = 1; ContainerFrame_GenerateFrame(legacy); assert(legacyItem.zvUpgradeArrow.shown)
 
 -- Roll frames are recycled, cancel immediately, and may wait for item data.
@@ -186,6 +189,20 @@ assert(not FW:RegisterUpgradeItemButton(forbidden, function() error("never calle
 assert(not FW:RegisterUpgradeItemButton(custom, nil))
 assert(FW:RegisterUpgradeItemButton(custom, function() error("unavailable custom data") end))
 assert(not custom.zvUpgradeArrow.shown)
+
+-- Native/addon discovery may supply an owner and defer its one shared paint.
+local window = object("ExtraItemWindow")
+local icon = object(nil, window); icon.icon = {}
+callCount = #scored
+assert(FW:RegisterUpgradeItemButton(icon, function() return "item:100" end,
+    {owner=window, anchor=icon.icon, deferPaint=true}))
+assert(#scored == callCount and not icon.zvUpgradeArrow)
+FW:RefreshUpgradeIndicators(); pump()
+assert(icon.zvUpgradeArrow.shown and icon.zvUpgradeArrow.anchor[2] == icon.icon)
+window:Hide(); assert(not icon.zvUpgradeArrow.shown)
+window:Show(); icon:Hide(); icon:Show(); assert(icon.zvUpgradeArrow.shown)
+assert(#icon.textures == 1 and #(icon.hooks.OnShow or {}) == 1,
+    "repeated discovery keeps one texture and one item show hook")
 
 -- Disabling toggles clears existing arrows before the timer and does zero scoring.
 FW.DB.options.upgradeBags, FW.DB.options.upgradeRolls = false, false

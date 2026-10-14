@@ -80,6 +80,7 @@ function methods:SetFont(_, size) self.fontSize = size end
 function methods:GetFont() return "font", self.fontSize end
 function methods:SetTextColor(...) self.color = {...} end
 function methods:SetColorTexture(...) self.color = {...} end
+function methods:SetTexture(texture) self.texture = texture end
 function methods:SetChecked(value) self.checked = value end
 function methods:GetChecked() return self.checked end
 function methods:SetEnabled(value) self.enabled = value end
@@ -93,16 +94,46 @@ function methods:Hide() if self.shown then self.shown = false self:Fire("OnHide"
 function methods:SetShown(shown) if shown then self:Show() else self:Hide() end end
 function methods:SetFrameLevel(value) self.level = value end
 function methods:GetFrameLevel() return self.level or 1 end
+function methods:Raise() self.raised = (self.raised or 0) + 1 end
 function methods:SetScrollChild(child) self.scrollChild = child end
 function methods:GetVerticalScroll() return self.scroll end
 function methods:SetVerticalScroll(value) self.scroll = value end
 function methods:GetVerticalScrollRange() return math.max(0, self.scrollChild:GetHeight() - self:GetHeight()) end
 function methods:GetNumLines() local _, lines = self.text:gsub("\n", "") return lines + 1 end
-for _, name in ipairs({ "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor", "SetJustifyH", "SetJustifyV", "SetFontObject", "SetTextInsets", "SetAutoFocus", "SetMaxLetters", "SetMultiLine", "SetWordWrap", "SetFrameStrata", "SetClampedToScreen", "SetMovable", "SetResizable", "SetResizeBounds", "EnableMouse", "RegisterForDrag", "StartMoving", "StopMovingOrSizing", "StartSizing", "SetNormalTexture", "SetHighlightTexture", "SetPushedTexture", "UpdateScrollChildRect", "RegisterEvent" }) do
+for _, name in ipairs({ "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor", "SetJustifyH", "SetJustifyV", "SetFontObject", "SetTextInsets", "SetAutoFocus", "SetMaxLetters", "SetMultiLine", "SetWordWrap", "SetFrameStrata", "SetClampedToScreen", "SetMovable", "SetResizable", "SetResizeBounds", "EnableMouse", "EnableMouseWheel", "RegisterForDrag", "StartMoving", "StopMovingOrSizing", "StartSizing", "SetNormalTexture", "SetHighlightTexture", "SetPushedTexture", "UpdateScrollChildRect", "RegisterEvent" }) do
     methods[name] = function() end
 end
 function methods:SetMaxLetters(value) self.maxLetters=value end
 function methods:SetFrameStrata(value) self.strata=value end
+local catalogCalls = 0
+issecretvalue = function(value) return value == "SecretTexture" end
+GetLooseMacroIcons = function(values)
+    catalogCalls = catalogCalls + 1
+    values[#values + 1] = "Spell_Holy_HolyBolt"
+    values[#values + 1] = 135920
+    values[#values + 1] = "135920"
+    values[#values + 1] = "SecretTexture"
+    values[#values + 1] = -1
+    values[#values + 1] = 1.5
+    values[#values + 1] = math.huge
+    values[#values + 1] = 4294967296
+end
+GetMacroIcons = function(values)
+    catalogCalls = catalogCalls + 1
+    for index = 1, 100 do values[#values + 1] = 200000 + index end
+    values[#values + 1] = "../Invalid"
+end
+GetLooseMacroItemIcons = function(values)
+    catalogCalls = catalogCalls + 1
+    -- Some clients replace their output table instead of appending.
+    for key in pairs(values) do values[key] = nil end
+    values[#values + 1] = "INV_Chest_Plate01"
+    values[#values + 1] = "interface\\icons\\inv_chest_plate01"
+end
+GetMacroItemIcons = function(values)
+    catalogCalls = catalogCalls + 1
+    values[#values + 1] = 133001
+end
 UIParent = widget("Frame", "UIParent")
 UIParent:SetSize(1920, 1080)
 UISpecialFrames, SlashCmdList, StaticPopupDialogs = {}, {}, {}
@@ -134,6 +165,15 @@ SlashCmdList.ZWYKVALUES("")
 check(not FW.UI:IsShown(), "/zv closes the editor")
 SlashCmdList.ZWYKVALUES("")
 equal(#widgets, created, "reopening editor reuses widgets")
+equal(catalogCalls, 0, "opening the profile editor does not enumerate game icons")
+FW.UI:Hide()
+FW:ShowUI()
+check(FW.UI:IsShown(), "ShowUI opens the profile editor")
+equal(FW.UI.raised, 1, "ShowUI raises the editor above other windows")
+FW:ShowUI()
+check(FW.UI:IsShown(), "ShowUI keeps an already open editor visible")
+equal(FW.UI.raised, 2, "ShowUI raises an already open editor")
+equal(#widgets, created, "ShowUI reuses existing editor widgets")
 
 local function find(predicate)
     for _, control in ipairs(widgets) do if predicate(control) then return control end end
@@ -211,24 +251,20 @@ local defense = byText("Defense (skill)", "FontString")
 for _, text in ipairs({ "Haste (%)", "Expertise (%)", "Dodge (%)", "Parry (%)", "Block chance (%)" }) do
     check(byText(text, "FontString"), "percent weight label specifies its unit: " .. text)
 end
-byText("Rating", "FontString").parent:Fire("OnClick")
-equal(profile.secondaryUnit, "rating", "rating checkbox saves the explicit profile mode")
-equal(critical:GetText(), "Critical strike (rating)", "crit weight label immediately reflects rating mode")
-equal(defense:GetText(), "Defense (rating)", "defense weight label immediately reflects rating mode")
-equal(hit.parent.children[1]:GetText(), "Hit (rating)", "hit weight label immediately reflects rating mode")
-for _, text in ipairs({ "Haste (rating)", "Expertise (rating)", "Dodge (rating)", "Parry (rating)", "Block chance (rating)" }) do
-    check(byText(text, "FontString"), "rating weight label specifies its unit: " .. text)
+for _, control in ipairs(widgets) do
+    check(control:GetText() ~= "Rating" and control:GetText() ~= "Percent / skill", "editor has no secondary-unit mode choices")
 end
-local unitHelp = find(function(control) return control.kind == "FontString" and control:GetText():match("^Rating mode:") end)
-check(unitHelp:GetText():find("10 x 7 rating = 70", 1, true), "rating mode explains the raw-rating crit contribution")
-equal(strength:GetText(), "2.5", "changing units preserves unsaved primary weights")
-equal(hit:GetText(), "-3", "changing units preserves unsaved secondary weights")
-equal(profile.weights.hit, 0, "changing units does not apply draft weights")
-byText("Percent / skill", "FontString").parent:Fire("OnClick")
-equal(profile.secondaryUnit, "percent", "percent checkbox saves the explicit profile mode")
-equal(critical:GetText(), "Critical strike (%)", "crit weight label immediately returns to percent mode")
-equal(defense:GetText(), "Defense (skill)", "defense weight label immediately returns to skill mode")
-check(unitHelp:GetText():find("10 x 0.5% = 5", 1, true), "percent mode explains the percentage-point crit contribution")
+local unitHelp = find(function(control) return control.kind == "FontString" and control:GetText():match("^Secondary weights always") end)
+check(unitHelp:GetText():find("1% = 1", 1, true), "editor explains that secondary weights always use percentage points")
+profile.secondaryUnit = "rating" -- Simulate a malformed legacy in-memory profile.
+FW:RefreshUI()
+equal(critical:GetText(), "Critical strike (%)", "crit label always uses percentage points")
+equal(defense:GetText(), "Defense (skill)", "defense label always uses defense skill")
+equal(hit.parent.children[1]:GetText(), "Hit (%)", "hit label always uses percentage points")
+profile.secondaryUnit = "percent"
+equal(strength:GetText(), "2.5", "refresh preserves unsaved primary weights")
+equal(hit:GetText(), "-3", "refresh preserves unsaved secondary weights")
+equal(profile.weights.hit, 0, "refresh does not apply draft weights")
 equal(profile.weights.strength, 0, "weights remain drafts before applying")
 click("Item filters")
 local filterScroll = ZwykValuesItemFiltersScroll
@@ -457,6 +493,108 @@ check(pcall(swatch.Fire, swatch, "OnClick"), "native picker setup errors are han
 equal(profile.color.r, .3, "failed native picker setup preserves saved colors")
 ColorPickerFrame = modernPicker
 
+local iconControl = find(function(control) return control.isProfileIcon end)
+equal(profile.icon, nil, "profile icons are optional by default")
+check(not iconControl.children[1]:IsShown(), "a profile without an icon has no preview texture")
+local profileRow = find(function(control) return control.kind == "Button" and control.profileID == profile.id end)
+local _, _, _, noIconOffset = profileRow.name:GetPoint()
+equal(noIconOffset, 29, "profiles without icons keep the original name alignment")
+userText(name, "Icon draft name")
+userText(color, "#AABBCC")
+userText(strength, "9.5")
+local iconRevision, savedName, savedWeight = profile.revision, profile.name, profile.weights.strength
+local catalogAPIs = { GetLooseMacroIcons, GetMacroIcons, GetLooseMacroItemIcons, GetMacroItemIcons }
+GetLooseMacroIcons, GetMacroIcons, GetLooseMacroItemIcons, GetMacroItemIcons = nil, nil, nil, nil
+check(pcall(iconControl.Fire, iconControl, "OnClick"), "missing game icon APIs do not raise Lua errors")
+local emptyCell = find(function(control) return control.isProfileIconChoice end)
+check(not emptyCell:IsShown(), "unavailable game catalogs leave no invalid texture choices")
+emptyCell.parent.done:Fire("OnClick")
+GetLooseMacroIcons, GetMacroIcons, GetLooseMacroItemIcons, GetMacroItemIcons = table.unpack(catalogAPIs)
+iconControl:Fire("OnClick")
+local iconCell = find(function(control) return control.isProfileIconChoice end)
+local iconDialog = iconCell.parent
+check(iconDialog:IsShown(), "icon control opens a game icon picker")
+equal(catalogCalls, 4, "opening the picker lazily enumerates spell and item icons")
+equal(#iconDialog.cells, 48, "picker creates only one reusable page of icon buttons")
+equal(iconCell.iconValue, "Interface\\Icons\\Spell_Holy_HolyBolt", "bare game texture names gain the native icon path")
+equal(iconDialog.cells[2].iconValue, 135920, "numeric game icons remain texture file IDs")
+equal(iconDialog.cells[3].iconValue, 200001, "numeric strings deduplicate against native file IDs")
+equal(iconDialog.page:GetText(), "1 / 3", "catalog pages include game spell and item icons")
+check(iconDialog.cells[3].iconValue == 200001, "an item enumerator that replaces its output cannot erase spell icons")
+check(not iconDialog.previous.enabled and iconDialog.next.enabled, "first page enables only forward navigation")
+iconCell:Fire("OnClick")
+equal(profile.icon, "Interface\\Icons\\Spell_Holy_HolyBolt", "choosing a game icon saves it immediately")
+check(not iconDialog:IsShown(), "choosing an icon closes its picker")
+equal(iconControl.children[1].texture, profile.icon, "selected icon appears beside profile color")
+check(iconControl.children[1]:IsShown(), "selected icon preview is visible")
+equal(profileRow.icon.texture, profile.icon, "profile list displays its selected icon")
+check(profileRow.icon:IsShown(), "profile list icon is visible")
+local _, _, _, withIconOffset = profileRow.name:GetPoint()
+equal(withIconOffset, 53, "profile names leave space for an optional icon")
+equal(name:GetText(), "Icon draft name", "icon changes preserve unsaved profile names")
+equal(color:GetText(), "#AABBCC", "icon changes preserve unsaved HEX colors")
+equal(strength:GetText(), "9.5", "icon changes preserve unsaved weights")
+equal(profile.name, savedName, "icon changes do not apply draft names")
+equal(profile.weights.strength, savedWeight, "icon changes do not apply draft weights")
+equal(profile.revision, iconRevision, "icon changes do not invalidate score revisions")
+local iconWidgets = #widgets
+iconControl:Fire("OnClick")
+equal(#widgets, iconWidgets, "reopening the icon picker reuses all widgets")
+equal(catalogCalls, 4, "reopening the picker reuses the native catalog")
+check(iconCell.selected:IsShown(), "picker marks the saved icon")
+iconDialog.next:Fire("OnClick")
+equal(iconDialog.page:GetText(), "2 / 3", "next page changes the visible icon range")
+equal(iconCell.iconValue, 200047, "next page reuses icon cells with the next textures")
+iconDialog:Fire("OnMouseWheel", -1)
+equal(iconDialog.page:GetText(), "3 / 3", "mouse wheel can browse pages")
+check(not iconDialog.next.enabled, "last page disables forward navigation")
+equal(iconDialog.cells[8].iconValue, 133001, "last page includes the final native item icon")
+check(not iconDialog.cells[9]:IsShown(), "last page hides cells beyond the catalog")
+iconDialog:Fire("OnMouseWheel", -1)
+equal(iconDialog.page:GetText(), "3 / 3", "wheel navigation stays within available pages")
+userText(iconDialog.search, "inv_chest")
+equal(iconCell.iconValue, "Interface\\Icons\\INV_Chest_Plate01", "name search finds native item icons")
+check(not iconDialog.cells[2]:IsShown(), "case-insensitive duplicate paths are displayed once")
+userText(iconDialog.search, "200099")
+equal(iconCell.iconValue, 200099, "texture file IDs can be searched")
+userText(iconDialog.search, "not an icon")
+check(not iconCell:IsShown(), "a search with no matches hides icon cells")
+userText(iconDialog.search, "135920")
+iconCell:Fire("OnClick")
+equal(profile.icon, 135920, "picker saves native numeric texture IDs")
+iconControl:Fire("OnClick")
+iconDialog.none:Fire("OnClick")
+equal(profile.icon, nil, "None removes the saved profile icon")
+check(not profileRow.icon:IsShown(), "clearing an icon hides it in the profile list")
+local _, _, _, restoredOffset = profileRow.name:GetPoint()
+equal(restoredOffset, 29, "clearing an icon restores the original name alignment")
+equal(profile.revision, iconRevision, "removing an icon leaves score revisions unchanged")
+iconControl:Fire("OnClick")
+local staleIconClick, staleNoneClick = iconCell:GetScript("OnClick"), iconDialog.none:GetScript("OnClick")
+local iconOther = assert(FW:CreateProfile("Icon other profile", {}))
+find(function(control) return control.kind == "Button" and control.profileID == iconOther.id end):Fire("OnClick")
+check(not iconDialog:IsShown(), "switching profiles closes the previous icon picker")
+iconControl:Fire("OnClick")
+staleIconClick()
+staleNoneClick()
+equal(iconOther.icon, nil, "stale icon callbacks cannot modify another profile")
+iconDialog.done:Fire("OnClick")
+find(function(control) return control.kind == "Button" and control.profileID == profile.id end):Fire("OnClick")
+FW:DeleteProfile(iconOther.id)
+local iconDeleted = assert(FW:CreateProfile("Icon deletion profile", {}))
+find(function(control) return control.kind == "Button" and control.profileID == iconDeleted.id end):Fire("OnClick")
+iconControl:Fire("OnClick")
+local deletedIconClick = iconCell:GetScript("OnClick")
+FW:DeleteProfile(iconDeleted.id)
+check(not iconDialog:IsShown(), "deleting a profile closes its icon picker")
+deletedIconClick()
+equal(FW.DB.profiles[iconDeleted.id], nil, "stale icon callbacks cannot recreate deleted profiles")
+iconControl:Fire("OnClick")
+FW.UI:Hide()
+check(not iconDialog:IsShown(), "closing the editor closes its icon picker")
+FW:ShowUI()
+equal(catalogCalls, 4, "profile and editor refreshes do not reload the icon catalog")
+
 local debug = find(function(control) return control.optionKey == "debugUnknownStats" end)
 check(not debug:GetChecked(), "unknown-stat debug option starts disabled")
 debug:SetChecked(true)
@@ -473,6 +611,7 @@ local mainName = byText("Main: None", "FontString")
 equal(FW:GetMainProfile(), nil, "arrows start with no main profile")
 check(not main:GetChecked(), "selected profile is not main by default")
 local arrowControls = {}
+equal(byText("Item windows", "FontString").parent.optionKey, "upgradeBags", "item-window arrows retain the existing bag-arrow preference")
 for _, key in ipairs({ "upgradeBags", "upgradeRolls", "upgradeChat" }) do
     local control = find(function(candidate) return candidate.optionKey == key end)
     arrowControls[#arrowControls + 1] = control
@@ -594,20 +733,23 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     within(byText("Apply weights", "Button"), FW.UI, "apply button fits editor")
     within(byText("Clear cache", "Button"), FW.UI, "cache button fits footer")
     check(ZwykValuesStatsScroll:GetHeight() >= 190, "resized editor keeps useful visible weight area")
-    for _, choice in ipairs({ "Rating", "Percent / skill" }) do
-        byText(choice, "FontString").parent:Fire("OnClick")
-        for _, control in ipairs({ critical, defense }) do
-            check(#control:GetText() * control.fontSize * .56 <= control:GetWidth(), "secondary units fit beside their weights at minimum width")
-            local box
-            for _, child in ipairs(control.parent.children) do if child.kind == "EditBox" then box = child end end
-            separate(control, box, "secondary weight labels leave room for the numeric field")
-        end
-        check(math.ceil(#unitHelp:GetText() * unitHelp.fontSize * .56 / unitHelp:GetWidth()) * unitHelp.fontSize <= unitHelp:GetHeight(), "unit explanation fits its available height")
+    for _, control in ipairs({ critical, defense }) do
+        check(#control:GetText() * control.fontSize * .56 <= control:GetWidth(), "secondary units fit beside their weights at minimum width")
+        local box
+        for _, child in ipairs(control.parent.children) do if child.kind == "EditBox" then box = child end end
+        separate(control, box, "secondary weight labels leave room for the numeric field")
     end
+    check(math.ceil(#unitHelp:GetText() * unitHelp.fontSize * .56 / unitHelp:GetWidth()) * unitHelp.fontSize <= unitHelp:GetHeight(), "unit explanation fits its available height")
     within(byText("Item filters", "Button"), FW.UI, "filter button fits minimum editor width")
     within(swatch, FW.UI, "clickable color square fits minimum editor width")
+    within(iconControl, FW.UI, "optional icon control fits minimum editor width")
+    separate(iconControl, swatch, "icon picker does not overlap the color square")
+    within(iconDialog, FW.UI, "icon dialog fits minimum editor size")
+    separate(iconDialog.previous, iconDialog.none, "icon pagination leaves space for None")
+    separate(iconDialog.next, iconDialog.done, "icon pagination leaves space for Done")
+    for _, cell in ipairs(iconDialog.cells) do within(cell, iconDialog, "icon cells fit the picker") end
     separate(swatch, byText("Set color", "Button"), "color picker square does not overlap HEX save button")
-    separate(byText("Item filters", "Button"), byText("Rating", "FontString"), "filter button leaves room for secondary-unit choices")
+    separate(byText("Item filters", "Button"), unitHelp, "filter button leaves room for the secondary-unit explanation")
     within(filterDialog, FW.UI, "filter dialog fits minimum editor size")
     within(otherClasses, filterDialog, "class-restriction checkbox fits filter dialog")
     within(byText("Include items restricted to other classes", "FontString"), filterDialog, "class-restriction label fits filter dialog")
@@ -641,10 +783,12 @@ local remaining = FW:GetProfiles()
 for _, existing in ipairs(remaining) do FW:DeleteProfile(existing.id) end
 check(not byText("Item filters", "Button").enabled, "filter button is disabled without a profile")
 check(not swatch.enabled, "color picker square is disabled without a profile")
+check(not iconControl.enabled, "icon picker is disabled without a profile")
 check(not otherClasses.enabled and not weaponFilter.enabled and not armorFilter.enabled, "open filters disable their controls when the profile is deleted")
 local restored = assert(FW:CreateProfile("Restored profile", {}))
 check(byText("Item filters", "Button").enabled, "creating a profile re-enables filters")
 check(swatch.enabled, "creating a profile re-enables the color picker")
+check(iconControl.enabled, "creating a profile re-enables the icon picker")
 check(otherClasses.enabled and weaponFilter.enabled and armorFilter.enabled, "new profile enables existing dialog controls")
 check(otherClasses:GetChecked() and weaponFilter:GetChecked() and armorFilter:GetChecked(), "new profile restores default inclusion")
 click("Done")

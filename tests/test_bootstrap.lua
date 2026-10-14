@@ -1,6 +1,6 @@
 local FW = {}
 local counts={initialize=0,hooks=0,refresh=0,invalidate=0,loaded=0,ui=0,
-    upgradeInvalidations=0,indicators=0,recentInvalidations=0,characterButton=0}
+    upgradeInvalidations=0,indicators=0,recentInvalidations=0,characterButton=0,blizzardOptions=0,auctionIndicators=0}
 local messages, equip, hovered = {}, {}, nil
 local events, eventHandler
 DEFAULT_CHAT_FRAME={AddMessage=function(_,message) messages[#messages+1]=message end}
@@ -22,6 +22,8 @@ function FW:Initialize()
 end
 function FW:InstallTooltipHooks() counts.hooks=counts.hooks+1 end
 function FW:InstallCharacterSheetButton() counts.characterButton=counts.characterButton+1 end
+function FW:InstallBlizzardOptions() counts.blizzardOptions=counts.blizzardOptions+1 end
+function FW:InstallAuctionUpgradeIndicators() counts.auctionIndicators=counts.auctionIndicators+1 end
 function FW:RefreshTooltips() counts.refresh=counts.refresh+1 end
 function FW:InvalidateCache() counts.invalidate=counts.invalidate+1 end
 function FW:InvalidateRecentItemReads() counts.recentInvalidations=counts.recentInvalidations+1 end
@@ -57,12 +59,16 @@ local function fire(event,id,success) eventHandler(nil,event,id,success) end
 fire("PLAYER_EQUIPMENT_CHANGED",16)
 assert(counts.refresh==0)
 fire("ADDON_LOADED","OtherAddon")
-assert(counts.initialize==0 and counts.characterButton==0)
+assert(counts.initialize==0 and counts.characterButton==0 and counts.blizzardOptions==0 and counts.auctionIndicators==0)
 fire("ADDON_LOADED","ZwykValues")
 assert(counts.initialize==1 and counts.hooks==1)
 assert(counts.characterButton==1,"Install the character launcher when ZwykValues loads")
+assert(counts.blizzardOptions==1,"Register Blizzard addon options when ZwykValues loads")
+assert(counts.auctionIndicators==1,"Install auction indicators when ZwykValues loads")
 fire("ADDON_LOADED","Blizzard_CharacterUI")
 assert(counts.characterButton==2,"Retry launcher installation when the character UI loads later")
+assert(counts.blizzardOptions==2,"Retry Blizzard settings registration after a later addon load")
+assert(counts.auctionIndicators==2,"Retry auction indicators when their native UI loads later")
 fire("PLAYER_EQUIPMENT_CHANGED",16)
 assert(FW.equipmentRevision==1 and counts.refresh==1)
 assert(counts.recentInvalidations==1 and counts.upgradeInvalidations==1)

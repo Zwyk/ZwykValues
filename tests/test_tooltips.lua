@@ -872,4 +872,31 @@ postCall(averageRefresh,{hyperlink=variant})
 assert(math.abs(AverageUseRefreshTextLeft4.size-10.2)<1e-9, "a returning Average row shrinks once")
 averageRefresh:Hide()
 assert(AverageUseRefreshTextLeft3.size==12 and AverageUseRefreshTextLeft4.size==12 and averageRefresh.fwBaseFonts==nil, "hiding restores both smaller Base and Average rows")
+-- Profile icons decorate the main label only and remain optional. Their
+-- presentation changes must update the decoration guard without a score revision.
+FW.ValidateProfileIcon=function(_, icon)
+    if icon == 135920 or icon == "Interface\\Icons\\INV_Sword_04" then return icon end
+end
+profiles={{id="one",name="Icon profile",revision=1,color={r=.8,g=.2,b=.1},icon=135920}}
+FW.CompareItem=function() return {score=100,record={stats={}},comparisons={}} end
+FW.GetBaseScore=nil; FW.CompareBaseItem=nil
+FW.GetAverageUseScore=nil; FW.CompareAverageUseItem=nil
+FW.DB.options.showComparisons=true
+local iconTip=tooltip("ProfileIconTooltip","item:988")
+postCall(iconTip,{hyperlink=iconTip.link})
+assert(iconTip.lines[2].text=="|T135920:14:14:0:0|t Icon profile")
+assert(iconTip.lines[2].right=="100.00" and iconTip.lines[2].r==.8)
+local iconSignature=iconTip.fwSignature
+postCall(iconTip,{hyperlink=iconTip.link})
+assert(#iconTip.lines==2,"repeated icon callbacks do not duplicate score rows")
+profiles[1].icon="Interface\\Icons\\INV_Sword_04"
+postCall(iconTip,{hyperlink=iconTip.link})
+assert(iconTip.fwSignature~=iconSignature,"icon changes affect the tooltip signature without revising weights")
+assert(iconTip.lines[#iconTip.lines].text=="|TInterface\\Icons\\INV_Sword_04:14:14:0:0|t Icon profile")
+iconTip:Clear(); profiles[1].icon=nil
+postCall(iconTip,{hyperlink=iconTip.link})
+assert(iconTip.lines[2].text=="Icon profile","unset icons keep the original profile label")
+iconTip:Clear(); profiles[1].icon="|Tinvalid|t"
+postCall(iconTip,{hyperlink=iconTip.link})
+assert(iconTip.lines[2].text=="Icon profile","unvalidated values cannot inject texture markup")
 print("Tooltip tests passed")
