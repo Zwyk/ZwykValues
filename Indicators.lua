@@ -9,6 +9,7 @@ local refreshPending = false
 local betterBagsItems = setmetatable({}, { __mode = "k" })
 local betterBagsEvents, betterBagsMessages
 local betterBagsBankBags = {}
+local lootScrolls, clearedLootSlots, lootClosed = {}, {}, false
 
 local function usable(frame)
     if not frame then return false end
@@ -198,6 +199,21 @@ local function registerRollFrame(frame, deferPaint)
     end
 end
 
+local function visitRollFrames(callback)
+    local seen = {}
+    local function visit(frame)
+        if usable(frame) and not seen[frame] then seen[frame] = true; callback(frame) end
+    end
+    for index = 1, NUM_GROUP_LOOT_FRAMES or 4 do visit(_G["GroupLootFrame" .. index]) end
+    -- Current Forever also uses unnamed gamepad cards with the same IconFrame
+    -- and rollID contract. SetupItemDisplay catches newly initialized cards;
+    -- this explicit owner catches cards already visible when hooks install.
+    local scrollBox = GamepadGroupLootRollFrame and GamepadGroupLootRollFrame.ScrollBox
+    if usable(scrollBox) and type(scrollBox.EnumerateFrames) == "function" then
+        for _, frame in scrollBox:EnumerateFrames() do visit(frame) end
+    end
+end
+
 local globalHooks = {}
 local function hookGlobal(name, callback)
     if globalHooks[name] or type(_G[name]) ~= "function" or type(hooksecurefunc) ~= "function" then return end
@@ -209,6 +225,113 @@ local function watchWindow(frame, refresh)
     windows[frame] = true
     if type(frame.HookScript) == "function" then
         pcall(frame.HookScript, frame, "OnShow", refresh)
+    end
+end
+
+local function clearLootIndicators(slot)
+    for _, entry in pairs(buttons) do
+        if entry.lootSlotProvider then
+            local ok, current = pcall(entry.lootSlotProvider)
+            if slot == nil or entry.lootSlot == slot or (ok and current == slot) then hide(entry) end
+        end
+    end
+end
+
+local function registerLootButton(button, slotProvider, anchor, row, deferPaint)
+    if not usable(button) then return end
+    local entry = buttons[button]
+    entry = register(button, function()
+        if lootClosed or (entry and entry.lootReleased) then return end
+        local slot = slotProvider()
+        if entry then entry.lootSlot = slot end
+        if not validIndex(slot) or clearedLootSlots[slot] or type(GetLootSlotType) ~= "function" or
+            type(GetLootSlotLink) ~= "function" then return end
+        local itemType = Enum and Enum.LootSlotType and Enum.LootSlotType.Item or LOOT_SLOT_ITEM or 1
+        if GetLootSlotType(slot) ~= itemType then return end
+        return GetLootSlotLink(slot)
+    end, "upgradeBags", LootFrame, anchor, deferPaint)
+    if not entry then return end
+    entry.lootSlotProvider, entry.lootRow = slotProvider, row
+    local ok, slot = pcall(slotProvider)
+    if ok then entry.lootSlot = slot end
+    return entry
+end
+
+local function registerLootRow(row, deferPaint)
+    if not usable(row) or type(row.GetSlotIndex) ~= "function" then return end
+    local button = row.Item
+    local entry = registerLootButton(button, function() return row:GetSlotIndex() end,
+        button and (button.icon or button.Icon), row, deferPaint)
+    if not entry then return end
+    -- LOOT_SLOT_CHANGED reinitializes an existing row directly, without a
+    -- ScrollBox acquisition. Native Init finishes the icon before this hook.
+    hookMethod(row, "Init", function()
+        entry.lootReleased = false
+        paint(button, entry)
+    end)
+end
+
+local function legacyLootSlot(button, index)
+    if type(button.IsEnabled) == "function" and not button:IsEnabled() then return end
+    local frame = LootFrame
+    if not usable(frame) or not validIndex(frame.page) then return end
+    local count = frame.numLootItems
+    if type(frame.AutoLootTable) == "table" then count = #frame.AutoLootTable end
+    if not validIndex(count, 0) then return end
+    local perPage = LOOTFRAME_NUMBUTTONS or 4
+    if count > perPage then perPage = perPage - 1 end
+    if index > perPage then return end
+    local slot = perPage * (frame.page - 1) + index
+    if slot > count or button.slot ~= slot then return end
+    local autoLoot = frame.AutoLootTable and frame.AutoLootTable[slot]
+    if autoLoot and autoLoot.hide then return end
+    return slot
+end
+
+local function registerLegacyLootButton(index, deferPaint)
+    if not validIndex(index) or index > (LOOTFRAME_NUMBUTTONS or 4) then return end
+    local button = _G["LootButton" .. index]
+    registerLootButton(button, function() return legacyLootSlot(button, index) end,
+        button and (button.icon or button.Icon or _G["LootButton" .. index .. "IconTexture"]), nil, deferPaint)
+end
+
+local function scanLoot(deferPaint)
+    local frame = LootFrame
+    if not usable(frame) then return end
+    watchWindow(frame, function() scanLoot() end)
+    hookMethod(frame, "Open", function()
+        lootClosed, clearedLootSlots = false, {}
+        scanLoot()
+    end)
+    hookMethod(frame, "Close", function()
+        lootClosed = true
+        clearLootIndicators()
+    end)
+    local scrollBox = frame.ScrollBox
+    if usable(scrollBox) and type(ScrollUtil) == "table" then
+        local subscriptions = lootScrolls[scrollBox]
+        if not subscriptions then subscriptions = {}; lootScrolls[scrollBox] = subscriptions end
+        if not subscriptions.initialized and type(ScrollUtil.AddInitializedFrameCallback) == "function" then
+            subscriptions.initialized = pcall(ScrollUtil.AddInitializedFrameCallback, scrollBox, function(_, row)
+                -- Reused rows already repaint in Init; first-seen rows need
+                -- discovery here even when scrolling creates no loot event.
+                local known = row and buttons[row.Item]
+                if known then known.lootReleased = false end
+                registerLootRow(row, known ~= nil)
+            end, FW, false)
+        end
+        if not subscriptions.released and type(ScrollUtil.AddReleasedFrameCallback) == "function" then
+            subscriptions.released = pcall(ScrollUtil.AddReleasedFrameCallback, scrollBox, function(_, row)
+                local entry = row and buttons[row.Item]
+                if entry then entry.lootReleased = true; hide(entry) end
+            end, FW)
+        end
+    end
+    if not enabled("upgradeBags") or not visible(frame) then return end
+    if usable(scrollBox) and type(scrollBox.ForEachFrame) == "function" then
+        scrollBox:ForEachFrame(function(row) registerLootRow(row, deferPaint) end)
+    else
+        for index = 1, LOOTFRAME_NUMBUTTONS or 4 do registerLegacyLootButton(index, deferPaint) end
     end
 end
 
@@ -330,7 +453,7 @@ local function scanMerchant(deferPaint)
 end
 
 local function installItemWindowHooks()
-    scanBank(true); scanTrade(true); scanMerchant(true)
+    scanBank(true); scanTrade(true); scanMerchant(true); scanLoot(true)
     hookGlobal("BankFrameItemButton_Update", function(button)
         if button and not button.isBag then
             register(button, legacyBankLink, "upgradeBags", BankFrame, button.icon or button.Icon)
@@ -343,6 +466,10 @@ local function installItemWindowHooks()
     hookGlobal("TradeFrame_UpdateTargetItem", function(id) registerTradeItem(id, true) end)
     hookGlobal("MerchantFrame_UpdateMerchantInfo", function() scanMerchant() end)
     hookGlobal("MerchantFrame_UpdateBuybackInfo", function() scanMerchant() end)
+    -- The legacy native updater has already assigned button.slot, including
+    -- its page offset, and updated the enabled/visible state at this point.
+    hookGlobal("LootFrame_UpdateButton", function(index) registerLegacyLootButton(index) end)
+    hookGlobal("LootFrame_Update", function() scanLoot(true) end)
 end
 
 local function installNativeHooks()
@@ -352,7 +479,7 @@ local function installNativeHooks()
     hookGlobal("GroupLootFrame_SetupItemDisplay", function(frame) registerRollFrame(frame) end)
     hookGlobal("GroupLootFrame_OnShow", function(frame) registerRollFrame(frame) end)
     hookGlobal("GroupLootContainer_OpenNewFrame", function() FW:RefreshUpgradeIndicators() end)
-    for index = 1, 4 do registerRollFrame(_G["GroupLootFrame" .. index]) end
+    visitRollFrames(function(frame) registerRollFrame(frame, true) end)
     installItemWindowHooks()
 end
 
@@ -457,7 +584,7 @@ function FW:RefreshBagUpgradeIndicators()
     refreshBetterBags(true)
     if enabled("upgradeBags") then
         visitNativeContainers(function(frame) hookContainer(frame); scanContainer(frame, true) end)
-        scanBank(true); scanTrade(true); scanMerchant(true)
+        scanBank(true); scanTrade(true); scanMerchant(true); scanLoot(true)
         if type(self.RefreshAuctionUpgradeIndicators) == "function" then self:RefreshAuctionUpgradeIndicators(true) end
     end
     for button, entry in pairs(buttons) do
@@ -467,7 +594,7 @@ end
 
 function FW:RefreshRollUpgradeIndicators()
     if enabled("upgradeRolls") then
-        for index = 1, 4 do registerRollFrame(_G["GroupLootFrame" .. index], true) end
+        visitRollFrames(function(frame) registerRollFrame(frame, true) end)
     end
     for button, entry in pairs(buttons) do
         if entry.option == "upgradeRolls" then paint(button, entry) end
@@ -504,6 +631,16 @@ function FW:InstallUpgradeIndicators()
     frame:SetScript("OnEvent", function(_, event, arg1)
         if event == "UNIT_INVENTORY_CHANGED" and arg1 ~= "player" then return end
         if event == "ADDON_LOADED" or event == "PLAYER_LOGIN" then installNativeHooks() end
+        if event == "LOOT_OPENED" then
+            lootClosed, clearedLootSlots = false, {}
+        elseif event == "LOOT_SLOT_CLEARED" then
+            if validIndex(arg1) then clearedLootSlots[arg1] = true; clearLootIndicators(arg1) end
+        elseif event == "LOOT_SLOT_CHANGED" then
+            if validIndex(arg1) then clearedLootSlots[arg1] = nil end
+        elseif event == "LOOT_CLOSED" then
+            lootClosed = true
+            clearLootIndicators()
+        end
         if event == "CANCEL_LOOT_ROLL" or event == "CANCEL_ALL_LOOT_ROLLS" then
             for _, entry in pairs(buttons) do
                 if entry.option == "upgradeRolls" and entry.owner and
@@ -529,6 +666,7 @@ function FW:InstallUpgradeIndicators()
         "PLAYERREAGENTBANKSLOTS_CHANGED", "BANK_TABS_CHANGED", "BANK_TAB_SETTINGS_UPDATED",
         "TRADE_SHOW", "TRADE_CLOSED", "TRADE_UPDATE", "TRADE_PLAYER_ITEM_CHANGED", "TRADE_TARGET_ITEM_CHANGED",
         "MERCHANT_SHOW", "MERCHANT_CLOSED", "MERCHANT_UPDATE",
+        "LOOT_READY", "LOOT_OPENED", "LOOT_CLOSED", "LOOT_SLOT_CHANGED", "LOOT_SLOT_CLEARED",
     }) do pcall(frame.RegisterEvent, frame, event) end
     installNativeHooks()
     self:RefreshUpgradeIndicators()

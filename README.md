@@ -1,4 +1,4 @@
-# ZwykValues 0.1.18
+# ZwykValues 0.1.19
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
@@ -24,6 +24,8 @@ WoW stores each addon's SavedVariables in a file named after that addon, so rena
 Create, copy, rename, or delete profiles in the left column. Set an individual tooltip color and toggle **Active** for every profile you want shown. Multiple profiles can be active together. Click the color square to open the native color picker; selecting a color saves it for that profile, and **Cancel** restores its original color. The hexadecimal field and **Set color** remain available.
 
 An optional **Icon** beside the color controls opens a picker of the game's available macro icons. Choose an icon to show it before the profile name in the list and item tooltips, or choose **None** to remove it. Icon choices save immediately and remain part of copied profiles and full profile exports. Existing profiles start without an icon; icon changes keep your unsaved edits and cached item scores.
+
+The picker groups icons into **Your class**, **Spells**, **Items** and **Other**. **All** puts your class first, using the spellbook and artwork explicitly labelled for that class. Search matches partial words in available spell/item names, ranks, descriptions, class/category names, texture filenames and IDs. Case and accents are ignored; multiple words narrow the results. Names come from the spellbook and available item data; unrelated icons remain searchable by their texture filenames and IDs. Hover an icon for its name and known details.
 
 Edit weights in the grouped stat editor and apply them. Positive, zero, negative, and fractional weights are supported. The initial **My profile** is empty: it contains no invented class or specialization weights.
 
@@ -112,8 +114,8 @@ In `/zv`, select a profile and check **Main for upgrade arrows** in the left-han
 
 Enable any of the three locations separately (all are off initially):
 
-- **Item windows**: a green arrow on upgrade item icons in bags, banks, trade, vendor and auction-house windows.
-- **Loot rolls**: a green arrow on the item icon in native loot-roll windows.
+- **Item windows**: a green arrow on upgrade item icons in bags, banks, trade, vendor, auction-house and loot windows.
+- **Loot rolls**: a green arrow on the item icon in native loot-roll windows, including pooled gamepad roll cards.
 - **Chat item links**: an arrow immediately after item links in newly received chat messages.
 
 An arrow means the item scores higher than an equipped replacement under the main profile. Rings/trinkets need to beat at least one equipped slot; two-handed weapons use the combined main/off-hand score. Comparisons wait for main-hand compatibility where needed. Parsing or stat-unit issues suppress the affected upgrade decision, while tooltips retain their known subtotal and diagnostic warning.
@@ -122,7 +124,7 @@ Item-window and roll arrows refresh after item data loads, equipment changes (in
 
 Version 0.1.13 fixes repeated hover work: only item-data completions the addon is waiting for invalidate comparisons and refresh icons; unrelated, duplicate and failed notifications do not redraw all bags. A refresh checks each icon once. Partial reads and subtotals share a bounded, unsaved one-second cache across profiles, Full/Base rows and equipped comparisons, and temporary loading decisions retry after expiry. Completed requests, equipment/enchant changes and cache clearing invalidate those reads immediately. Definitive exclusions reuse a false upgrade decision. Automatic metadata retries are throttled; explicit diagnostic refreshes remain available. These caches reduce repeated scans without turning incomplete data into permanently saved scores.
 
-Native Blizzard bag, bank, trade, vendor, auction-house and loot-roll windows are supported. Merchant purchase and buyback icons share the same upgrade check. BetterBags 0.5.14 is supported automatically, including its bank and list-row item icons; it uses the same **Item windows** checkbox and main profile. Arrows update when equipment, profiles or item data change, and clear when a slot is reused. Empty slots and item-browser previews are excluded.
+Native Blizzard bag, bank, trade, vendor, auction-house, loot and loot-roll windows are supported. Merchant purchase and buyback icons share the same upgrade check. Loot rows clear immediately when looted, released, reused or closed; money and currency rows receive no arrow. BetterBags 0.5.14 is supported automatically, including its bank and list-row item icons; it uses the same **Item windows** checkbox and main profile. Arrows update when equipment, profiles or item data change, and clear when a slot is reused. Empty slots and item-browser previews are excluded.
 
 Other third-party bag addons can integrate their buttons explicitly with `ZwykValues:RegisterUpgradeItemButton(button, linkProvider)` and re-register after their own slot updates; `linkProvider(button)` must return the current full item link or nil.
 

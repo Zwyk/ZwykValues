@@ -6,7 +6,6 @@ local UI
 local refreshItemFilters
 local closeColorPicker
 local closeIconPicker
-local iconCatalog
 local ROW_HEIGHT = 30
 local unpack = unpack or table.unpack
 local finite = function(value)
@@ -332,37 +331,6 @@ local function showColorPicker()
     end
 end
 
--- These are the same spell/item catalogs used by Blizzard's IconDataProvider.
--- Read them only when the picker opens, and reuse a small page of buttons.
-local function getIconCatalog()
-    if iconCatalog then return iconCatalog end
-    local values, result, seen = {}, {}, {}
-    for _, name in ipairs({ "GetLooseMacroIcons", "GetMacroIcons", "GetLooseMacroItemIcons", "GetMacroItemIcons" }) do
-        local enumerate = _G[name]
-        if type(enumerate) == "function" then
-            local found = {}
-            if pcall(enumerate, found) then
-                for _, value in ipairs(found) do values[#values + 1] = value end
-            end
-        end
-    end
-    for _, value in ipairs(values) do
-        if not issecretvalue or not issecretvalue(value) then
-            if type(value) == "string" then
-                value = tonumber(value) or (value:lower():match("^interface[\\/]") and value or ("Interface\\Icons\\" .. value))
-            end
-            local icon = FW:ValidateProfileIcon(value)
-            local key = type(icon) == "string" and icon:lower() or icon
-            if icon and not seen[key] then
-                seen[key] = true
-                result[#result + 1] = icon
-            end
-        end
-    end
-    if #result > 0 then iconCatalog = result end
-    return result
-end
-
 closeIconPicker = function()
     if not UI then return end
     UI.iconPickerSession = nil
@@ -384,8 +352,14 @@ local function refreshIconPage()
     dialog.page:SetText(session.page .. " / " .. pages)
     dialog.previous:SetEnabled(session.page > 1)
     dialog.next:SetEnabled(session.page < pages)
+    dialog.count:SetText(#matches .. (#matches == 1 and " icon" or " icons"))
+    for _, control in ipairs(dialog.categories) do
+        setEnabled(control, control.categoryKey ~= session.category)
+    end
     for index, cell in ipairs(dialog.cells) do
-        local icon = matches[(session.page - 1) * 48 + index]
+        local entry = matches[(session.page - 1) * 48 + index]
+        local icon = entry and entry.icon
+        cell.entry = entry
         cell.iconValue = icon
         cell.texture:SetTexture(icon)
         cell.selected:SetShown(icon ~= nil and icon == session.profile.icon)
@@ -397,20 +371,16 @@ end
 local function filterIcons()
     local session = UI.iconPickerSession
     if not session then return end
-    local query = trim(UI.iconDialog.search:GetText()):lower()
-    session.matches, session.page = {}, 1
-    for _, icon in ipairs(session.catalog) do
-        if query == "" or tostring(icon):lower():find(query, 1, true) then
-            session.matches[#session.matches + 1] = icon
-        end
-    end
+    local query = UI.iconDialog.search:GetText()
+    session.matches = FW:FilterProfileIconCatalog(session.catalog, query, session.category)
+    session.page = 1
     refreshIconPage()
 end
 
 local function createIconPicker()
     local dialog = panel(UI.frame)
     UI.iconDialog = dialog
-    dialog:SetSize(400, 390)
+    dialog:SetSize(560, 444)
     dialog:SetPoint("CENTER")
     dialog:SetFrameStrata("DIALOG")
     dialog:SetFrameLevel(UI.frame:GetFrameLevel() + 20)
@@ -418,21 +388,26 @@ local function createIconPicker()
     backdrop(dialog, { 0.055, 0.065, 0.09, 1 })
     dialog.title = label(dialog, "Profile icon", 15, { 1, 0.82, 0 })
     dialog.title:SetPoint("TOPLEFT", 16, -16)
-    dialog.title:SetWidth(320)
+    dialog.title:SetWidth(480)
     dialog.title:SetWordWrap(false)
     local close = CreateFrame("Button", nil, dialog, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -3, -3)
     close:SetScript("OnClick", closeIconPicker)
-    label(dialog, "Name / ID", 11):SetPoint("TOPLEFT", 17, -53)
-    dialog.search = editBox(dialog, 285)
-    dialog.search:SetPoint("TOPLEFT", 85, -45)
+    label(dialog, "Search", 11):SetPoint("TOPLEFT", 17, -53)
+    dialog.search = editBox(dialog, 442)
+    dialog.search:SetPoint("TOPLEFT", 92, -45)
     dialog.search:SetScript("OnTextChanged", filterIcons)
     dialog.search:SetScript("OnEscapePressed", closeIconPicker)
+    hint(dialog.search, "Search icons", "Match part of a spell or item name, class, category, texture name or ID. Multiple words narrow the results.")
+    dialog.categories = {}
+    dialog.count = label(dialog, "", 11, { 0.65, 0.74, 0.85 })
+    dialog.count:SetPoint("BOTTOM", 0, 46)
+    dialog.count:SetJustifyH("CENTER")
     dialog.cells = {}
     for index = 1, 48 do
         local cell = CreateFrame("Button", nil, dialog)
         cell:SetSize(38, 38)
-        cell:SetPoint("TOPLEFT", 26 + ((index - 1) % 8) * 44, -82 - math.floor((index - 1) / 8) * 44)
+        cell:SetPoint("TOPLEFT", 107 + ((index - 1) % 8) * 44, -122 - math.floor((index - 1) / 8) * 44)
         cell.texture = cell:CreateTexture(nil, "ARTWORK")
         cell.texture:SetAllPoints()
         cell:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
@@ -440,7 +415,19 @@ local function createIconPicker()
         cell.selected:SetAllPoints()
         cell.selected:SetTexture("Interface\\Buttons\\CheckButtonHilight")
         cell.isProfileIconChoice = true
-        hint(cell, "Profile icon")
+        cell:SetScript("OnEnter", function(self)
+            local entry = self.entry
+            if not entry then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(entry.label or "Profile icon", 1, 0.82, 0)
+            for _, category in ipairs(UI.iconPickerSession and UI.iconPickerSession.categories or {}) do
+                if category.key == entry.category then GameTooltip:AddLine(category.label, 0.75, 0.8, 0.9) break end
+            end
+            for _, detail in ipairs(entry.details or {}) do GameTooltip:AddLine(detail, 0.9, 0.9, 0.9, true) end
+            GameTooltip:AddLine("Icon: " .. tostring(entry.icon), 0.65, 0.7, 0.8, true)
+            GameTooltip:Show()
+        end)
+        cell:SetScript("OnLeave", function() GameTooltip:Hide() end)
         dialog.cells[index] = cell
     end
     dialog.none = button(dialog, "None", 65)
@@ -448,7 +435,7 @@ local function createIconPicker()
     dialog.previous = button(dialog, "<", 40, function()
         if UI.iconPickerSession then UI.iconPickerSession.page = UI.iconPickerSession.page - 1 refreshIconPage() end
     end)
-    dialog.previous:SetPoint("BOTTOMLEFT", 100, 14)
+    dialog.previous:SetPoint("BOTTOMLEFT", 180, 14)
     dialog.page = label(dialog, "", 11)
     dialog.page:SetPoint("LEFT", dialog.previous, "RIGHT", 6, 0)
     dialog.page:SetWidth(76)
@@ -477,14 +464,28 @@ local function showIconPicker()
     if UI.dialog then UI.dialog:Hide() end
     if UI.filterDialog then UI.filterDialog:Hide() end
     if not UI.iconDialog then createIconPicker() end
-    local catalog = getIconCatalog()
-    local session = { profile = profile, catalog = catalog, matches = catalog, page = 1 }
+    local catalog, categories = FW:GetProfileIconCatalog()
+    local session = { profile = profile, catalog = catalog, categories = categories, category = "all", matches = catalog, page = 1 }
     UI.iconPickerSession = session
     UI.iconDialog.title:SetText("Icon for " .. (profile.name or "profile"))
-    UI.iconDialog.search:SetText("")
-    for index, icon in ipairs(catalog) do
-        if icon == profile.icon then session.page = math.floor((index - 1) / 48) + 1 break end
+    local choices = { { key = "all", label = "All" } }
+    for _, category in ipairs(categories) do choices[#choices + 1] = category end
+    for index, category in ipairs(choices) do
+        local control = UI.iconDialog.categories[index]
+        if not control then
+            control = button(UI.iconDialog, "", 100)
+            control:SetPoint("TOPLEFT", 17 + (index - 1) * 106, -80)
+            UI.iconDialog.categories[index] = control
+        end
+        control.categoryKey = category.key
+        control:SetText(category.label)
+        control:SetScript("OnClick", function()
+            if UI.iconPickerSession ~= session then return end
+            session.category = category.key
+            filterIcons()
+        end)
     end
+    UI.iconDialog.search:SetText("")
     UI.iconDialog.none:SetScript("OnClick", function() saveIcon(session, nil) end)
     refreshIconPage()
     UI.iconDialog:Show()
@@ -1035,7 +1036,7 @@ local function createUI()
         hint(control, text .. " upgrade arrows", explanation .. " Requires a main profile. Each location can be enabled independently; changes apply immediately.")
         return control
     end
-    UI.upgradeBags = upgradeOption("Item windows", 79, "upgradeBags", "Show an upgrade arrow on item icons in bags, banks, trade and vendor windows, and the auction house.")
+    UI.upgradeBags = upgradeOption("Item windows", 79, "upgradeBags", "Show an upgrade arrow on item icons in bags, loot, banks, trade and vendor windows, and the auction house.")
     UI.upgradeRolls = upgradeOption("Loot rolls", 103, "upgradeRolls", "Show an upgrade arrow on the item icon in native loot-roll windows.")
     UI.upgradeChat = upgradeOption("Chat item links", 127, "upgradeChat", "Show an arrow next to item links in newly received chat messages once item data is loaded. Existing messages keep their original display.")
 

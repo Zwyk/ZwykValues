@@ -146,7 +146,7 @@ local popup
 StaticPopup_Show = function(kind, _, _, data) popup = { kind = kind, data = data } end
 
 local FW = {}
-for _, file in ipairs({ "JSON.lua", "Stats.lua", "Core.lua", "UI.lua" }) do assert(loadfile(addonPath .. "/" .. file))("ZwykValues", FW) end
+for _, file in ipairs({ "JSON.lua", "Stats.lua", "Core.lua", "IconCatalog.lua", "UI.lua" }) do assert(loadfile(addonPath .. "/" .. file))("ZwykValues", FW) end
 local tooltipRefreshes, upgradeRefreshes = 0, 0
 function FW:RefreshTooltips() tooltipRefreshes = tooltipRefreshes + 1 end
 function FW:RefreshUpgradeIndicators() upgradeRefreshes = upgradeRefreshes + 1 end
@@ -510,20 +510,40 @@ local emptyCell = find(function(control) return control.isProfileIconChoice end)
 check(not emptyCell:IsShown(), "unavailable game catalogs leave no invalid texture choices")
 emptyCell.parent.done:Fire("OnClick")
 GetLooseMacroIcons, GetMacroIcons, GetLooseMacroItemIcons, GetMacroItemIcons = table.unpack(catalogAPIs)
+local spellCatalogCalls = 0
+UnitClass = function() return "Paladin", "PALADIN" end
+Enum = { SpellBookSpellBank = { Player = 0 } }
+C_SpellBook = {
+    GetNumSpellBookSkillLines = function() spellCatalogCalls = spellCatalogCalls + 1 return 2 end,
+    GetSpellBookSkillLineInfo = function(index)
+        if index == 1 then return { name = "General", itemIndexOffset = 0, numSpellBookItems = 0 } end
+        return { name = "Holy", iconID = 135920, itemIndexOffset = 0, numSpellBookItems = 1 }
+    end,
+    GetSpellBookItemInfo = function() return { name = "Holy Light", subName = "Rank 1", iconID = 135920, spellID = 635 } end,
+    GetSpellBookItemDescription = function() return "Heals a friendly target" end,
+}
 iconControl:Fire("OnClick")
 local iconCell = find(function(control) return control.isProfileIconChoice end)
 local iconDialog = iconCell.parent
 check(iconDialog:IsShown(), "icon control opens a game icon picker")
 equal(catalogCalls, 4, "opening the picker lazily enumerates spell and item icons")
 equal(#iconDialog.cells, 48, "picker creates only one reusable page of icon buttons")
-equal(iconCell.iconValue, "Interface\\Icons\\Spell_Holy_HolyBolt", "bare game texture names gain the native icon path")
-equal(iconDialog.cells[2].iconValue, 135920, "numeric game icons remain texture file IDs")
-equal(iconDialog.cells[3].iconValue, 200001, "numeric strings deduplicate against native file IDs")
+equal(iconCell.entry.category, "playerClass", "the player's class icons are shown first")
+equal(#iconDialog.categories, 5, "picker offers All and four native icon categories")
+check(not iconDialog.categories[1].enabled, "All is selected when opening the picker")
+local allEntries = FW:GetProfileIconCatalog()
+local firstCategory, lastCategory = {}, nil
+for _, entry in ipairs(allEntries) do
+    if lastCategory ~= entry.category then
+        check(not firstCategory[entry.category], "icons in each category form one ordered group")
+        firstCategory[entry.category], lastCategory = true, entry.category
+    end
+end
+local selectedFirstIcon = iconCell.iconValue
 equal(iconDialog.page:GetText(), "1 / 3", "catalog pages include game spell and item icons")
-check(iconDialog.cells[3].iconValue == 200001, "an item enumerator that replaces its output cannot erase spell icons")
 check(not iconDialog.previous.enabled and iconDialog.next.enabled, "first page enables only forward navigation")
 iconCell:Fire("OnClick")
-equal(profile.icon, "Interface\\Icons\\Spell_Holy_HolyBolt", "choosing a game icon saves it immediately")
+equal(profile.icon, selectedFirstIcon, "choosing a game icon saves it immediately")
 check(not iconDialog:IsShown(), "choosing an icon closes its picker")
 equal(iconControl.children[1].texture, profile.icon, "selected icon appears beside profile color")
 check(iconControl.children[1]:IsShown(), "selected icon preview is visible")
@@ -541,20 +561,49 @@ local iconWidgets = #widgets
 iconControl:Fire("OnClick")
 equal(#widgets, iconWidgets, "reopening the icon picker reuses all widgets")
 equal(catalogCalls, 4, "reopening the picker reuses the native catalog")
+local initialSpellCatalogCalls = spellCatalogCalls
 check(iconCell.selected:IsShown(), "picker marks the saved icon")
 iconDialog.next:Fire("OnClick")
 equal(iconDialog.page:GetText(), "2 / 3", "next page changes the visible icon range")
-equal(iconCell.iconValue, 200047, "next page reuses icon cells with the next textures")
+equal(iconCell.iconValue, allEntries[49].icon, "next page reuses icon cells with the next textures")
 iconDialog:Fire("OnMouseWheel", -1)
 equal(iconDialog.page:GetText(), "3 / 3", "mouse wheel can browse pages")
 check(not iconDialog.next.enabled, "last page disables forward navigation")
-equal(iconDialog.cells[8].iconValue, 133001, "last page includes the final native item icon")
-check(not iconDialog.cells[9]:IsShown(), "last page hides cells beyond the catalog")
+local lastPageCount = #allEntries - 96
+equal(iconDialog.cells[lastPageCount].iconValue, allEntries[#allEntries].icon, "last page includes the final native item icon")
+check(not iconDialog.cells[lastPageCount + 1]:IsShown(), "last page hides cells beyond the catalog")
 iconDialog:Fire("OnMouseWheel", -1)
 equal(iconDialog.page:GetText(), "3 / 3", "wheel navigation stays within available pages")
 userText(iconDialog.search, "inv_chest")
 equal(iconCell.iconValue, "Interface\\Icons\\INV_Chest_Plate01", "name search finds native item icons")
 check(not iconDialog.cells[2]:IsShown(), "case-insensitive duplicate paths are displayed once")
+userText(iconDialog.search, "liGh")
+equal(iconCell.iconValue, 135920, "partial localized spell names find numeric texture icons")
+userText(iconDialog.search, "friendly target")
+equal(iconCell.iconValue, 135920, "search finds words from native spell descriptions")
+userText(iconDialog.search, "rank 1")
+equal(iconCell.iconValue, 135920, "search includes spell rank metadata")
+userText(iconDialog.search, "635")
+equal(iconCell.iconValue, 135920, "search includes spell IDs as well as texture IDs")
+local iconTooltipOwner, iconTooltipTitle, iconTooltipLines = nil, nil, {}
+GameTooltip.SetOwner = function(_, owner) iconTooltipOwner = owner end
+GameTooltip.SetText = function(_, text) iconTooltipTitle = text end
+GameTooltip.AddLine = function(_, text) iconTooltipLines[#iconTooltipLines + 1] = text end
+iconCell:Fire("OnEnter")
+equal(iconTooltipOwner, iconCell, "the hovered icon owns its tooltip")
+check(iconTooltipTitle:find("Holy Light", 1, true) ~= nil, "icon tooltips identify native spell names")
+check(#iconTooltipLines >= 2, "icon tooltips include category and source details")
+userText(iconDialog.search, "")
+iconDialog.categories[4]:Fire("OnClick")
+check(not iconDialog.categories[4].enabled and iconDialog.categories[1].enabled, "selecting Items updates the category selection")
+equal(iconCell.entry.category, "items", "the Items category shows only item catalog entries")
+userText(iconDialog.search, "light")
+check(not iconCell:IsShown(), "search respects the chosen category")
+iconDialog.categories[2]:Fire("OnClick")
+equal(iconCell.iconValue, 135920, "switching categories retains the text query")
+iconDialog.categories[1]:Fire("OnClick")
+equal(catalogCalls, 4, "typing and changing categories never rebuilds the native catalog")
+equal(spellCatalogCalls, initialSpellCatalogCalls, "typing and category changes never rescan the spellbook")
 userText(iconDialog.search, "200099")
 equal(iconCell.iconValue, 200099, "texture file IDs can be searched")
 userText(iconDialog.search, "not an icon")
@@ -563,6 +612,12 @@ userText(iconDialog.search, "135920")
 iconCell:Fire("OnClick")
 equal(profile.icon, 135920, "picker saves native numeric texture IDs")
 iconControl:Fire("OnClick")
+userText(iconDialog.search, "inv_chest")
+iconCell:Fire("OnClick")
+equal(profile.icon, "Interface\\Icons\\INV_Chest_Plate01", "item category textures can be saved as profile icons")
+iconControl:Fire("OnClick")
+equal(iconCell.entry.category, "playerClass", "reopening starts with the player's class even when an item icon is saved")
+check(not iconDialog.categories[1].enabled, "reopening resets category browsing to All")
 iconDialog.none:Fire("OnClick")
 equal(profile.icon, nil, "None removes the saved profile icon")
 check(not profileRow.icon:IsShown(), "clearing an icon hides it in the profile list")
@@ -745,6 +800,14 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     within(iconControl, FW.UI, "optional icon control fits minimum editor width")
     separate(iconControl, swatch, "icon picker does not overlap the color square")
     within(iconDialog, FW.UI, "icon dialog fits minimum editor size")
+    within(iconDialog.search, iconDialog, "icon search fits the picker")
+    within(iconDialog.count, iconDialog, "match count fits the picker")
+    for index, control in ipairs(iconDialog.categories) do
+        within(control, iconDialog, "category buttons fit the picker")
+        separate(control, iconDialog.search, "categories leave room for the search field")
+        separate(control, iconDialog.cells[1], "categories leave room for the icon grid")
+        if index > 1 then separate(control, iconDialog.categories[index - 1], "category buttons do not overlap") end
+    end
     separate(iconDialog.previous, iconDialog.none, "icon pagination leaves space for None")
     separate(iconDialog.next, iconDialog.done, "icon pagination leaves space for Done")
     for _, cell in ipairs(iconDialog.cells) do within(cell, iconDialog, "icon cells fit the picker") end
