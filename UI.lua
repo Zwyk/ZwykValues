@@ -6,6 +6,13 @@ local UI
 local refreshItemFilters
 local closeColorPicker
 local closeIconPicker
+local refreshComparisonTarget
+local function closeProfileDialogs()
+    if not UI then return end
+    UI.comparisonSession, UI.calculationSession = nil, nil
+    if UI.comparisonDialog then UI.comparisonDialog:Hide() end
+    if UI.calculationDialog then UI.calculationDialog:Hide() end
+end
 local ROW_HEIGHT = 30
 local unpack = unpack or table.unpack
 local finite = function(value)
@@ -149,6 +156,8 @@ local function refreshEditor(force)
     if UI.iconPickerSession and (not profile or UI.iconPickerSession.profile ~= profile) then
         closeIconPicker()
     end
+    if (UI.comparisonSession and UI.comparisonSession.profile ~= profile) or
+       (UI.calculationSession and UI.calculationSession.profile ~= profile) then closeProfileDialogs() end
     local enabled = profile ~= nil
     for _, control in ipairs(UI.profileControls) do
         setEnabled(control, enabled)
@@ -162,7 +171,7 @@ local function refreshEditor(force)
         if force or not UI.dirtyName then UI.name:SetText(profile.name or "") end
         if force or not UI.dirtyColor then UI.color:SetText(hexColor(profile.color)) end
         UI.active:SetChecked(profile.active and true or false)
-        UI.main:SetChecked(FW.DB and FW.DB.options and FW.DB.options.mainProfileID == profile.id)
+        UI.upgradeProfile:SetChecked(profile.upgradeEnabled and true or false)
         previewColor(parseColor(UI.color:GetText()) or profile.color)
         UI.profileIcon:SetTexture(profile.icon)
         UI.profileIcon:SetShown(profile.icon ~= nil)
@@ -170,6 +179,7 @@ local function refreshEditor(force)
         updateUnitHelp(profile)
         for _, field in ipairs(UI.fields) do
             setEnabled(field.box, true)
+            if field.calculate then setEnabled(field.calculate, true) end
             if force or not UI.dirtyWeights then
                 field.box:SetText(tostring((profile.weights or {})[field.key] or 0))
             end
@@ -179,7 +189,7 @@ local function refreshEditor(force)
         UI.name:SetText("")
         UI.color:SetText("#FFFFFF")
         UI.active:SetChecked(false)
-        UI.main:SetChecked(false)
+        UI.upgradeProfile:SetChecked(false)
         previewColor()
         UI.profileIcon:Hide()
         UI.iconNone:Show()
@@ -187,16 +197,19 @@ local function refreshEditor(force)
         for _, field in ipairs(UI.fields) do
             field.box:SetText("0")
             setEnabled(field.box, false)
+            if field.calculate then setEnabled(field.calculate, false) end
         end
         UI.editorTitle:SetText("Create a profile to set weights")
     end
     if force then
         UI.dirtyName, UI.dirtyColor, UI.dirtyWeights = false, false, false
+        UI.draftCalculationOptions = nil
     end
     UI.weightState:SetText(UI.dirtyWeights and "Unsaved weights" or "Weights saved")
     UI.weightState:SetTextColor(UI.dirtyWeights and 1 or 0.6, UI.dirtyWeights and 0.78 or 0.72, UI.dirtyWeights and 0.35 or 0.64)
     UI.loading = false
     if refreshItemFilters then refreshItemFilters(profile) end
+    if refreshComparisonTarget then refreshComparisonTarget(profile) end
 end
 
 local function commit(changes, clearDraft, success)
@@ -212,27 +225,309 @@ local function commit(changes, clearDraft, success)
     end
     if clearDraft == "name" then UI.dirtyName = false end
     if clearDraft == "color" then UI.dirtyColor = false end
-    if clearDraft == "weights" then UI.dirtyWeights = false end
+    if clearDraft == "weights" then UI.dirtyWeights, UI.draftCalculationOptions = false, nil end
     FW:RefreshUI()
     status(success or "Profile saved.", "success")
     return true
 end
 
-local function applyWeights()
-    if not selectedProfile() then return end
+local function draftWeights(quiet)
     local weights = {}
     for _, field in ipairs(UI.fields) do
         local text = trim(field.box:GetText())
         local value = text == "" and 0 or tonumber(text)
         if not finite(value) then
-            status("Enter a finite number for " .. field.label .. ".", "error")
-            field.box:SetFocus()
-            field.box:HighlightText()
-            return
+            if not quiet then
+                status("Enter a finite number for " .. field.label .. ".", "error")
+                field.box:SetFocus()
+                field.box:HighlightText()
+            end
+            return nil
         end
         weights[field.key] = value
     end
-    commit({ weights = weights }, "weights", "Weights saved. Cached scores will use the updated weights.")
+    return weights
+end
+
+local function applyWeights()
+    if not selectedProfile() then return end
+    local weights = draftWeights()
+    if weights then
+        commit({ weights = weights, calculationOptions = UI.draftCalculationOptions }, "weights", "Weights saved. Cached scores will use the updated weights.")
+    end
+end
+
+local function comparisonContext(profile)
+    if FW.GetProfileComparisonContext then return FW:GetProfileComparisonContext(profile) end
+    local target = profile and profile.comparisonTarget
+    if target and target.mode == "set" then
+        return { label = "Set: " .. (target.name or "Unknown"), error = "Equipment Manager is unavailable." }
+    end
+    return { mode = "equipped", label = "Currently equipped" }
+end
+
+refreshComparisonTarget = function(profile)
+    if not UI.comparison then return end
+    local context = profile and comparisonContext(profile)
+    UI.comparisonCaption:SetText(not profile and "Compare: No profile" or context.error and "Compare: Unavailable" or
+        (context.mode == "equipped" and "Compare: Equipped" or context.label))
+    UI.comparisonCaption:SetTextColor(context and context.error and 1 or 0.85, context and context.error and 0.48 or 0.89, context and context.error and 0.35 or 0.94)
+end
+
+local function showComparisonPicker()
+    local profile = selectedProfile()
+    if not profile then return end
+    closeProfileDialogs()
+    if not UI.comparisonDialog then
+        local dialog = CreateFrame("Frame", "ZwykValuesComparisonPicker", UI.frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        UI.comparisonDialog = dialog
+        dialog:SetSize(430, 330)
+        dialog:SetPoint("CENTER")
+        dialog:SetFrameStrata("DIALOG")
+        dialog:EnableMouse(true)
+        dialog:SetFrameLevel(UI.frame:GetFrameLevel() + 10)
+        backdrop(dialog)
+        dialog.title = label(dialog, "Compare this profile with", 14, { 1, 0.82, 0.35 })
+        dialog.title:SetPoint("TOPLEFT", 18, -18)
+        dialog.message = label(dialog, "", 11, { 0.78, 0.84, 0.92 })
+        dialog.message:SetPoint("TOPLEFT", 18, -46)
+        dialog.message:SetPoint("TOPRIGHT", -18, -46)
+        dialog.message:SetHeight(42)
+        dialog.message:SetJustifyV("TOP")
+        dialog.scroll = CreateFrame("ScrollFrame", "ZwykValuesComparisonScroll", dialog, "UIPanelScrollFrameTemplate")
+        dialog.scroll:SetPoint("TOPLEFT", 18, -97)
+        dialog.scroll:SetPoint("BOTTOMRIGHT", -37, 52)
+        dialog.content = CreateFrame("Frame", nil, dialog.scroll)
+        dialog.content:SetWidth(370)
+        dialog.scroll:SetScrollChild(dialog.content)
+        dialog.rows = {}
+        dialog.close = button(dialog, "Close", 85, closeProfileDialogs)
+        dialog.close:SetPoint("BOTTOMRIGHT", -17, 15)
+        dialog:SetScript("OnHide", function() UI.comparisonSession = nil end)
+        if UISpecialFrames then table.insert(UISpecialFrames, "ZwykValuesComparisonPicker") end
+    end
+    local dialog = UI.comparisonDialog
+    local session = { profile = profile }
+    UI.comparisonSession = session
+    local choices = { { name = "Currently equipped", target = { mode = "equipped" } } }
+    local sets, err
+    if FW.GetEquipmentSetOptions then sets, err = FW:GetEquipmentSetOptions() else err = "Equipment Manager is unavailable on this client." end
+    for _, option in ipairs(sets or {}) do choices[#choices + 1] = option end
+    local context = comparisonContext(profile)
+    dialog.message:SetText(context.error and ((context.label or "Selected set") .. ": " .. context.error) or
+        (err or "Choose equipped items or a saved equipment set. This changes comparisons for this profile."))
+    dialog.title:SetText("Compare " .. (profile.name or "profile") .. " with")
+    for index, choice in ipairs(choices) do
+        local row = dialog.rows[index]
+        if not row then
+            row = button(dialog.content, "", 370)
+            row:SetHeight(30)
+            row:SetPoint("TOPLEFT", 0, -(index - 1) * 34)
+            row.icon = row:CreateTexture(nil, "ARTWORK")
+            row.icon:SetSize(21, 21)
+            row.icon:SetPoint("LEFT", 5, 0)
+            row.caption = label(row, "", 11, { 0.85, 0.89, 0.94 })
+            row.caption:SetPoint("LEFT", 31, 0)
+            row.caption:SetPoint("RIGHT", -8, 0)
+            row.caption:SetHeight(26)
+            row.caption:SetWordWrap(false)
+            dialog.rows[index] = row
+        end
+        local target = choice.target or { mode = "set", setID = choice.setID, name = choice.name, character = choice.character }
+        local selected = target.mode == "equipped" and (not profile.comparisonTarget or profile.comparisonTarget.mode == "equipped") or
+            target.mode == "set" and profile.comparisonTarget and profile.comparisonTarget.mode == "set" and target.setID == profile.comparisonTarget.setID and target.character == profile.comparisonTarget.character
+        row.target = target
+        row.caption:SetText((selected and "✓ " or "") .. (choice.name or "Equipment set"))
+        row.icon:SetTexture(choice.icon)
+        row.icon:SetShown(choice.icon ~= nil)
+        row:SetScript("OnClick", function()
+            if UI.comparisonSession ~= session or selectedProfile() ~= profile then return end
+            if commit({ comparisonTarget = target }, nil, "Comparison target saved.") then closeProfileDialogs() end
+        end)
+        hint(row, choice.name or "Currently equipped", target.mode == "equipped" and "Compare with items currently worn by this character." or
+            "Compare with the saved item variants in this equipment set. Missing or inaccessible items leave the comparison unavailable.")
+        row:Show()
+    end
+    for index = #choices + 1, #dialog.rows do dialog.rows[index]:Hide() end
+    dialog.content:SetHeight(math.max(1, #choices * 34))
+    dialog.scroll:SetVerticalScroll(0)
+    dialog.scroll:UpdateScrollChildRect()
+    dialog:Show()
+end
+
+local function calculationOptions(profile)
+    local result = FW.GetDerivedWeightDefaults and FW:GetDerivedWeightDefaults(profile) or {}
+    local options = {}
+    for key, value in pairs(result) do options[key] = value end
+    for key, value in pairs(UI.draftCalculationOptions or {}) do options[key] = value end
+    return options
+end
+
+local function weightCalculation(field, options, quiet)
+    if not FW.GetDerivedWeightOptions then return { available = false, reason = "Weight calculations are unavailable." } end
+    local weights = draftWeights(quiet)
+    if not weights then return { available = false, reason = "Enter valid numbers in the weight fields first." } end
+    return FW:GetDerivedWeightOptions(field.key, weights, options or calculationOptions(selectedProfile())) or
+        { available = false, reason = "This weight could not be calculated." }
+end
+
+local function useCalculatedWeight(field, result, options)
+    if not selectedProfile() or not result.available or not finite(result.value) then return end
+    UI.loading = true
+    field.box:SetText(string.format("%.8g", result.value))
+    UI.loading = false
+    if options then
+        UI.draftCalculationOptions = { combatShare = options.combatShare, castingShare = options.castingShare, whileCastingRegen = options.whileCastingRegen }
+    end
+    UI.dirtyWeights = true
+    UI.weightState:SetText("Unsaved weights")
+    UI.weightState:SetTextColor(1, 0.78, 0.35)
+    status(field.label .. " weight calculated. Apply weights to update item scores.")
+end
+
+local function showCalculationPrompt(field)
+    local profile = selectedProfile()
+    if not profile then return end
+    closeProfileDialogs()
+    if not UI.calculationDialog then
+        local dialog = CreateFrame("Frame", "ZwykValuesWeightCalculation", UI.frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        UI.calculationDialog = dialog
+        dialog:SetSize(520, 460)
+        dialog:SetPoint("CENTER")
+        dialog:SetFrameStrata("DIALOG")
+        dialog:EnableMouse(true)
+        dialog:SetFrameLevel(UI.frame:GetFrameLevel() + 10)
+        backdrop(dialog)
+        dialog.title = label(dialog, "Calculate weight", 14, { 1, 0.82, 0.35 })
+        dialog.title:SetPoint("TOPLEFT", 18, -18)
+        dialog.help = label(dialog, "", 11, { 0.78, 0.84, 0.92 })
+        dialog.help:SetPoint("TOPLEFT", 18, -45)
+        dialog.help:SetPoint("TOPRIGHT", -18, -45)
+        dialog.help:SetHeight(42)
+        dialog.help:SetJustifyV("TOP")
+        dialog.sliders = {}
+        dialog.detailsScroll = CreateFrame("ScrollFrame", "ZwykValuesCalculationDetails", dialog, "UIPanelScrollFrameTemplate")
+        dialog.detailsScroll:SetPoint("TOPLEFT", 18, -280)
+        dialog.detailsScroll:SetPoint("BOTTOMRIGHT", -37, 62)
+        dialog.detailsContent = CreateFrame("Frame", nil, dialog.detailsScroll)
+        dialog.detailsContent:SetWidth(465)
+        dialog.details = label(dialog.detailsContent, "", 11, { 0.84, 0.88, 0.94 })
+        dialog.details:SetPoint("TOPLEFT")
+        dialog.details:SetWidth(465)
+        dialog.details:SetJustifyV("TOP")
+        dialog.detailsScroll:SetScrollChild(dialog.detailsContent)
+        dialog.use = button(dialog, "Use calculated weight", 172)
+        dialog.use:SetPoint("BOTTOMRIGHT", -18, 17)
+        dialog.cancel = button(dialog, "Cancel", 85, closeProfileDialogs)
+        dialog.cancel:SetPoint("RIGHT", dialog.use, "LEFT", -8, 0)
+        dialog:SetScript("OnHide", function() UI.calculationSession = nil end)
+        if UISpecialFrames then table.insert(UISpecialFrames, "ZwykValuesWeightCalculation") end
+    end
+    local dialog = UI.calculationDialog
+    local session = { profile = profile, field = field, options = calculationOptions(profile) }
+    UI.calculationSession = session
+    dialog.title:SetText("Calculate " .. field.label .. " weight")
+    dialog.help:SetText("Ratios describe time spent regenerating mana. Calculated weights stay unsaved until you click Apply weights.")
+    local definitions = {
+        { key = "combatShare", text = "Time in combat", help = "Out of combat uses full Spirit regeneration; time in combat uses the casting assumptions below." },
+        { key = "castingShare", text = "Time while casting", help = "Share of time affected by the five-second mana regeneration rule. For MP5 this applies only to time in combat." },
+        { key = "whileCastingRegen", text = "Spirit regeneration while casting", help = "Percentage of normal Spirit regeneration retained while casting, including talents. The initial value is read from your current talents when possible." },
+    }
+    local function refresh()
+        if UI.calculationSession ~= session then return end
+        session.result = weightCalculation(field, session.options, true)
+        local result = session.result
+        local lines = { result.available and finite(result.value) and string.format("Calculated weight: %.8g", result.value) or (result.reason or "Calculation unavailable.") }
+        for _, line in ipairs(result.lines or {}) do lines[#lines + 1] = line end
+        dialog.details:SetText(table.concat(lines, "\n"))
+        local lineCount = 0
+        for _, line in ipairs(lines) do lineCount = lineCount + math.max(1, math.ceil(#line * 6.2 / 465)) end
+        local height = dialog.details.GetStringHeight and dialog.details:GetStringHeight() or lineCount * 14
+        height = math.max(14, height)
+        dialog.details:SetHeight(height)
+        dialog.detailsContent:SetHeight(height)
+        dialog.detailsScroll:UpdateScrollChildRect()
+        setEnabled(dialog.use, result.available and finite(result.value))
+    end
+    local row = 0
+    for index, definition in ipairs(definitions) do
+        local slider = dialog.sliders[index]
+        if not slider then
+            slider = CreateFrame("Slider", nil, dialog, "OptionsSliderTemplate")
+            slider:SetSize(470, 17)
+            slider:SetMinMaxValues(0, 100)
+            slider:SetValueStep(1)
+            if slider.SetObeyStepOnDrag then slider:SetObeyStepOnDrag(true) end
+            slider.caption = label(slider, "", 11, { 0.85, 0.89, 0.94 })
+            slider.caption:SetPoint("BOTTOMLEFT", 0, 7)
+            slider.caption:SetPoint("BOTTOMRIGHT", 0, 7)
+            slider.caption:SetHeight(18)
+            if slider.Low then slider.Low:SetText("0%") end
+            if slider.High then slider.High:SetText("100%") end
+            dialog.sliders[index] = slider
+        end
+        slider.optionKey = definition.key
+        local shown = field.key == "mp5" or definition.key ~= "combatShare"
+        slider:SetShown(shown)
+        if shown then
+            row = row + 1
+            slider:ClearAllPoints()
+            slider:SetPoint("TOPLEFT", 25, -(110 + (row - 1) * 57))
+            local function caption(value) slider.caption:SetText(definition.text .. ": " .. math.floor(value + 0.5) .. "%") end
+            slider:SetScript("OnValueChanged", nil)
+            local percent = math.max(0, math.min(100, (tonumber(session.options[definition.key]) or 0) * 100))
+            slider:SetValue(percent)
+            caption(percent)
+            slider:SetScript("OnValueChanged", function(_, value)
+                if UI.calculationSession ~= session then return end
+                session.options[definition.key] = math.max(0, math.min(1, value / 100))
+                caption(value)
+                refresh()
+            end)
+            hint(slider, definition.text, definition.help)
+        end
+    end
+    dialog.use:SetScript("OnClick", function()
+        if UI.calculationSession ~= session or selectedProfile() ~= profile then return end
+        refresh()
+        if session.result.available and finite(session.result.value) then
+            useCalculatedWeight(field, session.result, session.options)
+            closeProfileDialogs()
+        end
+    end)
+    refresh()
+    dialog:Show()
+end
+
+local function installCalculationButton(field)
+    if not FW.IsDerivedWeightStat or not FW:IsDerivedWeightStat(field.key) then return end
+    local control = CreateFrame("Button", nil, field.frame)
+    field.calculate = control
+    control.isDerivedWeight, control.statKey = true, field.key
+    control:SetSize(16, 16)
+    control:SetPoint("LEFT", 0, 0)
+    control:SetNormalTexture("Interface\\Buttons\\UI-OptionsButton")
+    control:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
+    field.text:ClearAllPoints()
+    field.text:SetPoint("LEFT", 21, 0)
+    control:SetScript("OnEnter", function(self)
+        local result = weightCalculation(field, nil, true)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Calculate " .. field.label .. " weight", 1, 0.82, 0)
+        for _, line in ipairs(result.lines or {}) do GameTooltip:AddLine(line, 0.9, 0.9, 0.9, true) end
+        if not result.available then GameTooltip:AddLine(result.reason or "Calculation unavailable.", 1, 0.5, 0.35, true)
+        elseif finite(result.value) then GameTooltip:AddLine(string.format("Calculated weight: %.8g", result.value), 0.45, 0.9, 0.6, true) end
+        GameTooltip:AddLine((field.key == "spirit" or field.key == "mp5") and "Click to set regeneration assumptions, then use the calculated weight." or
+            "Click to fill this weight from your current draft weights. Apply weights to save it.", 0.7, 0.8, 0.95, true)
+        GameTooltip:Show()
+    end)
+    control:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    control:SetScript("OnClick", function()
+        if field.key == "spirit" or field.key == "mp5" then showCalculationPrompt(field) return end
+        local result = weightCalculation(field, nil, false)
+        if result.available and finite(result.value) then useCalculatedWeight(field, result)
+        else status(result.reason or "This weight could not be calculated.", "error") end
+    end)
 end
 
 -- The game has one shared picker. Keep callbacks tied to the profile that
@@ -495,6 +790,7 @@ end
 local function selectProfile(id, reveal)
     closeColorPicker(true)
     closeIconPicker()
+    closeProfileDialogs()
     UI.selectedID = id
     UI.revealSelected = reveal
     refreshEditor(true)
@@ -848,6 +1144,7 @@ local function buildWeightFields()
         end)
         field.box:SetScript("OnEnterPressed", function(self) self:ClearFocus() applyWeights() end)
         hint(field.box, field.label, (statHints[field.key] or "Weight per 1 unit of this stat. Zero ignores it. Negative and decimal weights are allowed.") .. "\nImport/export key: " .. field.key)
+        installCalculationButton(field)
         UI.fields[#UI.fields + 1] = field
         group.fields[#group.fields + 1] = field
     end
@@ -892,7 +1189,7 @@ local function layoutWeights()
             field.frame:ClearAllPoints()
             field.frame:SetPoint("TOPLEFT", column * (columnWidth + gap) + 4, -(y + row * ROW_HEIGHT))
             field.frame:SetWidth(columnWidth)
-            field.text:SetWidth(math.max(50, columnWidth - 100))
+            field.text:SetWidth(math.max(50, columnWidth - (field.calculate and 121 or 100)))
         end
         y = y + math.ceil(#group.fields / columns) * ROW_HEIGHT + 9
     end
@@ -998,30 +1295,45 @@ local function createUI()
     UI.upgrades:SetPoint("BOTTOMLEFT", 8, 46)
     UI.upgrades:SetPoint("BOTTOMRIGHT", -8, 46)
     UI.upgrades:SetHeight(160)
-    label(UI.upgrades, "Upgrade arrows", 12, { 1, 0.82, 0.35 }):SetPoint("TOPLEFT", 9, -10)
-    UI.mainName = label(UI.upgrades, "Main: None", 10, { 0.76, 0.82, 0.9 })
-    UI.mainName:SetPoint("TOPLEFT", 9, -29)
-    UI.mainName:SetPoint("TOPRIGHT", -9, -29)
-    UI.mainName:SetHeight(18)
-    UI.mainName:SetWordWrap(false)
-    UI.main = CreateFrame("CheckButton", nil, UI.upgrades, "UICheckButtonTemplate")
-    UI.main:SetSize(24, 24)
-    UI.main:SetPoint("TOPLEFT", 5, -50)
-    label(UI.main, "Main for upgrade arrows", 10, { 0.88, 0.91, 0.96 }):SetPoint("LEFT", UI.main, "RIGHT", 0, 0)
-    UI.main:SetScript("OnClick", function(self)
+    UI.upgradeTitle = label(UI.upgrades, "Upgrade arrows (0)", 12, { 1, 0.82, 0.35 })
+    UI.upgradeTitle:SetPoint("TOPLEFT", 9, -10)
+    UI.upgradeTitle:SetPoint("TOPRIGHT", -9, -10)
+    UI.upgradeTitle:SetHeight(18)
+    UI.upgradeProfile = CreateFrame("CheckButton", nil, UI.upgrades, "UICheckButtonTemplate")
+    UI.upgradeProfile:SetSize(24, 24)
+    UI.upgradeProfile:SetPoint("TOPLEFT", 5, -28)
+    label(UI.upgradeProfile, "Use this profile", 10, { 0.88, 0.91, 0.96 }):SetPoint("LEFT", UI.upgradeProfile, "RIGHT", 0, 0)
+    UI.upgradeProfile:SetScript("OnClick", function(self)
         local profile = selectedProfile()
         if not profile then return end
         UI.committing = true
-        local ok, err = FW:SetMainProfile(self:GetChecked() and profile.id or nil)
+        local ok, err = FW:SetProfileUpgradeEnabled(profile.id, self:GetChecked() and true or false)
         UI.committing = false
         FW:RefreshUI()
         if not ok then
-            status(err or "Could not change the main profile.", "error")
+            status(err or "Could not change upgrade profile visibility.", "error")
         else
-            status(self:GetChecked() and (profile.name .. " is the main profile for upgrade arrows.") or "Main profile cleared. Choose one to show upgrade arrows.", "success")
+            status(self:GetChecked() and (profile.name .. " is enabled for upgrade arrows.") or (profile.name .. " is disabled for upgrade arrows."), "success")
         end
     end)
-    hint(UI.main, "Main profile for upgrade arrows", "Use the selected profile to identify upgrades against your equipped items. Choosing another profile replaces the previous main profile. It works even when this profile is inactive in tooltips. Clear this checkbox to use no main profile.")
+    hint(UI.upgradeProfile, "Use this profile for upgrade arrows", "Enable any number of profiles. Each can identify upgrades against equipped gear or its chosen equipment set, using the profile's color. This works even when the profile is inactive in tooltips.")
+    UI.comparison = button(UI.upgrades, "", 184, showComparisonPicker)
+    UI.comparison:SetHeight(22)
+    UI.comparison:SetPoint("TOPLEFT", 9, -55)
+    UI.comparisonCaption = label(UI.comparison, "Compare: Equipped", 10, { 0.85, 0.89, 0.94 })
+    UI.comparisonCaption:SetPoint("LEFT", 8, 0)
+    UI.comparisonCaption:SetPoint("RIGHT", -8, 0)
+    UI.comparisonCaption:SetHeight(19)
+    UI.comparisonCaption:SetWordWrap(false)
+    UI.comparison:SetScript("OnEnter", function(self)
+        local profile = selectedProfile()
+        local context = comparisonContext(profile)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(context.label or "Comparison target", 1, 0.82, 0)
+        GameTooltip:AddLine(context.error or "Click to choose currently equipped gear or a Blizzard Equipment Manager set for this profile.", 0.9, 0.9, 0.9, true)
+        GameTooltip:Show()
+    end)
+    UI.comparison:SetScript("OnLeave", function() GameTooltip:Hide() end)
     local function upgradeOption(text, y, key, explanation)
         local control = CreateFrame("CheckButton", nil, UI.upgrades, "UICheckButtonTemplate")
         control:SetSize(22, 22)
@@ -1033,7 +1345,7 @@ local function createUI()
             FW:RefreshUI()
             if not ok then status(err or "Could not update upgrade arrows.", "error") end
         end)
-        hint(control, text .. " upgrade arrows", explanation .. " Requires a main profile. Each location can be enabled independently; changes apply immediately.")
+        hint(control, text .. " upgrade arrows", explanation .. " Requires at least one profile enabled for arrows. Each location can be enabled independently; changes apply immediately.")
         return control
     end
     UI.upgradeBags = upgradeOption("Item windows", 79, "upgradeBags", "Show an upgrade arrow on item icons in bags, loot, banks, trade and vendor windows, and the auction house.")
@@ -1137,7 +1449,7 @@ local function createUI()
     UI.exportWeights:SetPoint("RIGHT", UI.export, "LEFT", -6, 0)
     hint(UI.export, "Export profile", "Exports the saved profile with its name, color, icon, units and item filters. Apply edited weights before exporting.")
     hint(UI.exportWeights, "Export weights", "Exports the saved weights using Sixty Upgrades keys. Name, color, icon, unit and item filter metadata are omitted.")
-    UI.profileControls = { UI.name, UI.rename, UI.active, UI.main, UI.color, UI.colorButton, UI.colorPicker, UI.icon, UI.itemFilters, UI.apply }
+    UI.profileControls = { UI.name, UI.rename, UI.active, UI.upgradeProfile, UI.comparison, UI.color, UI.colorButton, UI.colorPicker, UI.icon, UI.itemFilters, UI.apply }
     buildWeightFields()
 
     local note = label(frame, "Fixed weights ignore caps, procs, sets and rotations.", 10, { 0.66, 0.71, 0.79 })
@@ -1159,7 +1471,7 @@ local function createUI()
     UI.debugUnknown = option("Mark unrecognized stats", 340, "debugUnknownStats", false)
     UI.comparisons = option("Show upgrade comparisons", 590, "showComparisons", true)
     hint(UI.debugUnknown, "Unrecognized stat diagnostics", "Adds [ZV ?] next to unrecognized stat lines. Partial-data warnings and the issue log are available even when this option is off.")
-    hint(UI.comparisons, "Item comparisons", "Show the flat score change and percentage upgrade or downgrade against equipped items for every active profile.")
+    hint(UI.comparisons, "Item comparisons", "Show the flat score change and percentage upgrade or downgrade for every active tooltip profile, using its selected equipped gear or equipment set.")
     UI.status = label(frame, "", 11)
     UI.status:SetPoint("BOTTOMLEFT", 21, 44)
     UI.status:SetPoint("BOTTOMRIGHT", -21, 44)
@@ -1184,6 +1496,7 @@ local function createUI()
     frame:SetScript("OnHide", function()
         closeColorPicker(true)
         closeIconPicker()
+        closeProfileDialogs()
         if UI.dialog then UI.dialog:Hide() end
         if UI.filterDialog then UI.filterDialog:Hide() end
         UI.name:ClearFocus()
@@ -1247,8 +1560,8 @@ function FW:RefreshUI()
         for _ in pairs(self.DB.cache.items) do count = count + 1 end
     end
     UI.cache:SetText(string.format("Cached items: %d  |  Profiles: %d", count, #all))
-    local mainProfile = self:GetMainProfile()
-    UI.mainName:SetText("Main: " .. (mainProfile and mainProfile.name or "None"))
+    local upgradeProfiles = self.GetUpgradeProfiles and self:GetUpgradeProfiles() or {}
+    UI.upgradeTitle:SetText("Upgrade arrows (" .. #upgradeProfiles .. ")")
     local options = self.DB and self.DB.options or {}
     for _, control in ipairs({ UI.debugUnknown, UI.comparisons, UI.upgradeBags, UI.upgradeRolls, UI.upgradeChat }) do
         local value = options[control.optionKey]

@@ -1,4 +1,4 @@
-# ZwykValues 0.1.19
+# ZwykValues 0.1.20
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
@@ -37,7 +37,7 @@ For example, 20 Strength at weight 2 and 1% Crit at weight 10 give 50 points in 
 
 Profiles are account-wide, including their active status, colors, icons and item filters. All changes and the score cache are stored by WoW in the addon's `SavedVariables` on logout or `/reload`.
 
-Click **Item filters** in a profile to choose its weapon and armor types independently. The scrollable dialog provides a checkbox for each supported client subtype, including shields, class relics and miscellaneous armor/accessories. All types start checked for both new and existing profiles. Changes save immediately and apply to the profile's full/base tooltip values and its main-profile upgrade arrows.
+Click **Item filters** in a profile to choose its weapon and armor types independently. The scrollable dialog provides a checkbox for each supported client subtype, including shields, class relics and miscellaneous armor/accessories. All types start checked for both new and existing profiles. Changes save immediately and apply to the profile's full/base tooltip values and its upgrade arrows.
 
 Uncheck **Include items restricted to other classes** to exclude items whose explicit **Classes** restriction does not include your current character's class. An item allowing several classes remains included when yours is among them. This setting uses the current character, so a shared profile adapts when you log into another class. If required type or restriction metadata cannot be read, values wait for that data rather than assuming eligibility. Unchecked candidate items show no values for that profile; equipped comparison baselines still retain their complete score.
 
@@ -47,7 +47,7 @@ Copies and full profile exports preserve these choices. Bare weights JSON and ol
 
 The supplied Sixty Upgrades keys are preserved. **Import** accepts a bare JSON object of stat weights. Missing recognized keys become zero. Unknown keys and invalid numeric values are rejected with a message so typos cannot silently change a profile.
 
-**Export weights** produces the bare stat object. **Export profile** also preserves the profile name, color, icon and item filters. These metadata are lost when exporting only bare weights.
+**Export weights** produces the bare stat object. **Export profile** also preserves the profile name, color, icon, item filters, upgrade activation, comparison target and calculator ratios. These metadata are lost when exporting only bare weights.
 
 Secondary weights always use percentages; there is no rating mode:
 
@@ -76,13 +76,25 @@ English and French static tooltip text are supported, with localized Blizzard fo
 
 Version 0.1.16 reads elemental wand damage ranges and the client's school-damage API aliases. `Your spells pierce N Magical Resistance` contributes to spell penetration. Separate signed Armor lines are bonus armor: Tortoise Armor's `208 Armor` and `+40 Armor` become 208 base armor and 40 bonus armor, counted once. Explicit damage-received reduction and profession skill bonuses are recorded as ignored diagnostics because they have no matching weight in the current stat schema; they do not create an offensive spell-damage value or a partial-data warning.
 
+## Calculate weights from other weights
+
+A small gear before a supported attribute opens its calculation or fills its draft weight. Hover the gear to see the source weights, conversion rates, class, level and data source. These buttons calculate **weights**; they do not add derived stats to items or run during item hover. Review the result and click **Apply weights** to save it. Recalculate after a level or form change.
+
+Supported relationships include Strength from attack power and shield block value, Agility from attack power/armor/critical strike/dodge, Stamina from Health, Intellect from spell critical strike and any native attack-power conversion, Spirit from MP5, and the reverse Health/MP5 conversions. Attack-power helpers can also use autoattack DPS weights; their tooltip explains the limited autoattack model. Defense includes the supported avoidance/block weights, rather than an invented value for reduced enemy critical strikes.
+
+Native Forever conversion functions take priority and use the difference between the current stat and one additional point. Where they are unavailable, the helper identifies its Forever base coefficient or class/level Vanilla fallback. The fallback crit tables cover levels 1–60; an unavailable weighted conversion prevents applying the result. These conversions are separate from item secondary-stat parsing: item weights remain per **1 percentage point**, and raw rating still receives no guessed conversion.
+
+**Spirit** opens sliders for time affected by the five-second casting rule and the percentage of Spirit regeneration retained while casting. The initial retained-regeneration value is read from the active talent configuration when possible, including Paladin Reverence. **MP5** also asks for time in combat; its inverse calculation assumes full Spirit regeneration out of combat and applies the casting assumptions during combat. Chosen ratios save with Apply weights. Spirit's mana-regeneration coefficient uses the current Spirit breakpoint. A zero effective Spirit regeneration rate cannot infer an MP5 weight, so the dialog explains why that calculation is unavailable. Intellect's mana-pool value and Spirit's health regeneration are omitted because the current schema cannot express those resource/time assumptions reliably.
+
+Conversion references: [Forever character-stat UI](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_UIPanels_Game/Camelot/PaperDollFrameStats.lua), [RatingBuster's Forever conversion data](https://github.com/raethkcj/RatingBuster/blob/905c14184527e0466c85b1d180bcd62d875fd4dd/libs/StatLogic/CamelotLogic.lua), and [Forever Equipment Manager APIs](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/EquipmentManagerDocumentation.lua). The addon has no runtime dependency on these sources.
+
 ## Tooltip comparisons
 
 Values use a positive allowlist: supported weapon and armor subtypes in their character equipment slots, plus ammunition in the ammo slot. This includes jewelry, shields/offhands, relics, shirts and tabards. A weapon or armor candidate must have its subtype checked in that profile. Unknown numeric subtypes are excluded; missing class/subtype metadata waits for loading rather than assuming eligibility. Full and instant item-info APIs supply the classification. Equipped baselines bypass profile checkboxes while still requiring supported gear.
 
 Version 0.1.14 applies this classification before reading stat APIs or scanning tooltips. Unchecked candidate types also stop before parsing, without saving an empty record that could affect another profile. Only actual item hyperlinks enter tooltip decoration: recipe, enchant, spell and trade links are skipped, including blacksmithing recipe tooltips. Consumables, quest items, crafting materials, bags/quivers, profession equipment and other non-gear items receive no full/Base values, comparisons, upgrade arrows or stat-debug markers, even if an older cache contains a score.
 
-Ammunition's added damage per second uses the existing **Ranged weapon DPS** weight (`rangedDps`). For example, 7.5 ammo DPS at weight 2 gives 15 points. Ammo compares with the equipped ammunition slot; full/Base values and main-profile upgrade arrows use the same score. Weapon and armor subtype checkboxes do not exclude ammo. Ammunition does not require weapon speed or a damage range, and unreadable DPS remains partial rather than becoming a cached zero.
+Ammunition's added damage per second uses the existing **Ranged weapon DPS** weight (`rangedDps`). For example, 7.5 ammo DPS at weight 2 gives 15 points. Ammo compares with the equipped ammunition slot; full/Base values and profile upgrade arrows use the same score. Weapon and armor subtype checkboxes do not exclude ammo. Ammunition does not require weapon speed or a damage range, and unreadable DPS remains partial rather than becoming a cached zero.
 
 Every active profile adds one row with its name and score in the profile color. Candidate items show the signed point difference and percentage difference inline, with only the comparison fragment colored green for an increase, red for a decrease, or gray for equality:
 
@@ -92,7 +104,7 @@ A smaller, indented **Base** subline appears only when its displayed score or an
 
 A smaller **Average use** subline adds the average gain from readable on-use stat buffs to the unenchanted Base value. Each effect contributes `stat amount × duration / cooldown`, using seconds for both times and limiting uptime to 100%. For example, 120 spell power for 10 seconds on a 2-minute cooldown contributes 10 average spell power; the profile's spell-damage and healing weights determine its value. Each equipped comparison uses its own Base plus average-use value too. The subline appears only when its rounded score or comparisons differ from Base, including a passive candidate compared with an equipped on-use item.
 
-This estimate assumes using the item as soon as its cooldown ends. It needs an explicit flat stat amount, buff duration and total cooldown in the tooltip. It does not use the remaining cooldown, guess rating conversions, or model encounter length, delayed uses, shared trinket cooldowns, stacking, decreasing bonuses, proc chance or direct damage/healing abilities. Unsupported effects or an unavailable weighted secondary-stat unit show **Average use: unavailable** while retaining the ordinary scores. Main-profile bag, roll and chat arrows continue to use the full static score.
+This estimate assumes using the item as soon as its cooldown ends. It needs an explicit flat stat amount, buff duration and total cooldown in the tooltip. It does not use the remaining cooldown, guess rating conversions, or model encounter length, delayed uses, shared trinket cooldowns, stacking, decreasing bonuses, proc chance or direct damage/healing abilities. Unsupported effects or an unavailable weighted secondary-stat unit show **Average use: unavailable** while retaining the ordinary scores. Bag, roll and chat arrows continue to use each enabled profile's full static score.
 
 Version 0.1.8 accepts Forever's named item-quality colors (`|cnIQ2:`) as well as hexadecimal link colors, fixing **Base: Invalid item link** for those links. Both candidate and equipped item links retain their complete variant data when removing the enchant.
 
@@ -110,21 +122,23 @@ An empty slot has score zero; a zero or negative baseline displays **percentage 
 
 ## Optional upgrade arrows
 
-In `/zv`, select a profile and check **Main for upgrade arrows** in the left-hand **Upgrade arrows** panel. Exactly one profile can be main. Choosing another replaces it; clearing the checkbox or deleting that profile leaves no main. Its tooltip **Active** setting is independent. Main selection and location toggles are saved account-wide.
+In `/zv`, select each profile you want to use and check **Use this profile** in the **Upgrade arrows** panel. Any number of profiles can identify upgrades together, independently of their tooltip **Active** setting. Existing main-profile selections migrate automatically. Copies start with upgrade arrows disabled; full profile exports preserve the activation choice.
+
+Use **Compare: Equipped** to choose that profile's baseline: currently equipped items, or one of the current character's Blizzard Equipment Manager sets. The selection also applies to that profile's Full, Base and Average use tooltip comparisons. Set references are bound to their character. A deleted set, another character's set, an ignored slot or an unreadable set item produces an unavailable comparison; it never silently falls back to equipped gear or an empty slot. Open the appropriate bag or bank when the full stored item link is unavailable. Enchants and random-suffix variants are retained; selecting a set does not equip or modify it.
 
 Enable any of the three locations separately (all are off initially):
 
-- **Item windows**: a green arrow on upgrade item icons in bags, banks, trade, vendor, auction-house and loot windows.
-- **Loot rolls**: a green arrow on the item icon in native loot-roll windows, including pooled gamepad roll cards.
-- **Chat item links**: an arrow immediately after item links in newly received chat messages.
+- **Item windows**: profile-colored arrows on upgrade item icons in bags, banks, trade, vendor, auction-house and loot windows.
+- **Loot rolls**: profile-colored arrows on native loot-roll icons, including pooled gamepad roll cards.
+- **Chat item links**: each matching profile's colored arrow, preceded by its optional profile icon, immediately after a newly received item link.
 
-An arrow means the item scores higher than an equipped replacement under the main profile. Rings/trinkets need to beat at least one equipped slot; two-handed weapons use the combined main/off-hand score. Comparisons wait for main-hand compatibility where needed. Parsing or stat-unit issues suppress the affected upgrade decision, while tooltips retain their known subtotal and diagnostic warning.
+Item icons show up to three arrows in profile order, followed by a small **+N** count for additional matches. An arrow means the item scores higher than a replacement under that profile's selected comparison target. Rings/trinkets need to beat at least one comparable slot; two-handed weapons use the combined main/off-hand score. Comparisons wait for main-hand compatibility where needed. Parsing or stat-unit issues suppress the affected profile's upgrade decision, while tooltips retain their known subtotal and diagnostic warning.
 
-Item-window and roll arrows refresh after item data loads, equipment changes (including enchants), item-window updates, and profile/option edits. They clear when an icon is reused or a roll ends. Chat arrows are a snapshot when each message arrives: an uncached item link requests data and stays unmarked in that message; later messages can show its arrow once the data is available. Existing chat history is retained as originally displayed.
+Item-window and roll arrows refresh after item data loads, equipment changes (including enchants), equipment-set edits, bag/bank moves, item-window updates, and profile/option edits. They clear when an icon is reused or a roll ends. Chat arrows are a snapshot when each message arrives: an uncached item link requests data and stays unmarked in that message; later messages can show its arrow once the data is available. Existing chat history is retained as originally displayed.
 
 Version 0.1.13 fixes repeated hover work: only item-data completions the addon is waiting for invalidate comparisons and refresh icons; unrelated, duplicate and failed notifications do not redraw all bags. A refresh checks each icon once. Partial reads and subtotals share a bounded, unsaved one-second cache across profiles, Full/Base rows and equipped comparisons, and temporary loading decisions retry after expiry. Completed requests, equipment/enchant changes and cache clearing invalidate those reads immediately. Definitive exclusions reuse a false upgrade decision. Automatic metadata retries are throttled; explicit diagnostic refreshes remain available. These caches reduce repeated scans without turning incomplete data into permanently saved scores.
 
-Native Blizzard bag, bank, trade, vendor, auction-house, loot and loot-roll windows are supported. Merchant purchase and buyback icons share the same upgrade check. Loot rows clear immediately when looted, released, reused or closed; money and currency rows receive no arrow. BetterBags 0.5.14 is supported automatically, including its bank and list-row item icons; it uses the same **Item windows** checkbox and main profile. Arrows update when equipment, profiles or item data change, and clear when a slot is reused. Empty slots and item-browser previews are excluded.
+Native Blizzard bag, bank, trade, vendor, auction-house, loot and loot-roll windows are supported. Merchant purchase and buyback icons share the same upgrade check. Loot rows clear immediately when looted, released, reused or closed; money and currency rows receive no arrow. BetterBags 0.5.14 is supported automatically, including its bank and list-row item icons; it uses the same **Item windows** checkbox and enabled upgrade profiles. Arrows update when equipment, profiles or item data change, and clear when a slot is reused. Empty slots and item-browser previews are excluded.
 
 Other third-party bag addons can integrate their buttons explicitly with `ZwykValues:RegisterUpgradeItemButton(button, linkProvider)` and re-register after their own slot updates; `linkProvider(button)` must return the current full item link or nil.
 
@@ -144,7 +158,7 @@ Diagnostics include those lines, raw client stat keys, and parser warnings. Item
 
 Parsed stats and profile scores are stored locally. Cache keys include the full item payload, so suffixes, enchants, gems, and other variants do not collapse to one item ID; build, locale, and character level provide additional separation. Repeated tooltips and equipped comparisons reuse stored totals.
 
-Editing weights or units increments the profile revision and invalidates its scores. Color/name/active changes update display without changing stat values. The item cache is bounded to 2,000 variants. Missing or incomplete item data are not permanently cached as a zero-stat item. Equipment changes update comparisons; level/build/parser changes invalidate incompatible data.
+Editing weights increments the profile revision and invalidates its scores. Color/name/active changes update display without changing stat values. The item cache is bounded to 2,000 variants. Missing or incomplete item data are not permanently cached as a zero-stat item. Equipment changes update comparisons; level/build/parser changes invalidate incompatible data.
 
 | Command | Action |
 | --- | --- |
@@ -167,6 +181,8 @@ Run the included tests from the addon directory with a Lua interpreter, for exam
 
 ```sh
 lua tests/test_core.lua
+lua tests/test_derived_weights.lua
+lua tests/test_equipment_sets.lua
 lua tests/test_items.lua
 lua tests/test_compare.lua
 lua tests/test_base.lua
@@ -195,11 +211,13 @@ lua tests/test_hover_performance.lua
 - `Stats.lua`: stat schema and native API mappings.
 - `Core.lua`: profile management, import/export, scoring, and score-cache invalidation.
 - `Items.lua`: item variants, client data loading, normalization, static tooltip parsing and timed on-use stat buffs.
-- `Compare.lua`: equipped slot comparisons.
-- `Upgrades.lua`: main-profile upgrade decisions and local chat-link decoration.
+- `DerivedWeights.lua`: on-demand class/level weight calculations and regeneration assumptions.
+- `EquipmentSets.lua`: read-only, character-bound Equipment Manager baseline snapshots.
+- `Compare.lua`: selected baseline slot comparisons.
+- `Upgrades.lua`: independent profile upgrade decisions and local chat-link decoration.
 - `Indicators.lua`: native bag/loot-roll overlays and refresh hooks.
 - `Tooltips.lua`: native tooltip hooks and refresh handling.
-- `Textures/ArrowUp.tga` and `Textures/ArrowDown.tga`: tooltip comparison indicators.
+- `Textures/ArrowUp.tga` and `Textures/ArrowDown.tga`: tooltip comparison indicators; `ArrowUpWhite.tga` supports profile-colored upgrade markers.
 - `UI.lua`: profile and weight editor.
 - `Bootstrap.lua`: saved variables lifecycle, events, diagnostics, and slash commands.
 

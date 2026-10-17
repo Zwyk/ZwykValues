@@ -54,6 +54,8 @@ local function object(name, parent)
         local texture = {shown=false}
         function texture:SetTexture(path) self.path = path end
         function texture:SetSize(width, height) self.width, self.height = width, height end
+        function texture:SetVertexColor(...) self.color = {...} end
+        function texture:ClearAllPoints() self.anchor = nil end
         function texture:SetPoint(...) self.anchor = {...} end
         function texture:Show() self.shown = true end
         function texture:Hide() self.shown = false end
@@ -307,4 +309,33 @@ eventFrame:Fire("OnEvent", "ADDON_LOADED", "Blizzard_TradeUI"); pump()
 equal(hookCounts[_G].TradeFrame_UpdatePlayerItem, 1, "late UI loads never duplicate native hooks")
 equal(hookCounts[panel].GenerateItemSlotsForSelectedTab, 1)
 equal(eventFrame.scripts.OnUpdate, nil, "normal item windows never start continuous polling")
+
+-- Every native adapter uses the complete matching-profile list. Additional
+-- windows carrying the same item reuse each profile's comparison memo.
+local enabledProfiles = {
+    {id="tank",revision=1,color={r=0.2,g=0.4,b=1}},
+    {id="healer",revision=1,color={r=0.1,g=0.9,b=0.3}},
+}
+function FW:GetUpgradeProfiles() return enabledProfiles end
+FW:InvalidateUpgradeComparisons()
+reads = {}; before = #comparisons
+FW:RefreshUpgradeIndicators(); pump()
+for _, item in ipairs({currentBank, accountBank, BankFrameItem1, bankBagItem,
+    TradePlayerItem1ItemButton, TradeRecipientItem1ItemButton, MerchantItem1ItemButton}) do
+    check(shown(item), "multi-profile native item marker")
+    equal(#item.zvUpgradeArrows, 2)
+    check(item.zvUpgradeArrows[2].shown)
+    equal(item.zvUpgradeArrows[1].color[3], 1)
+    equal(item.zvUpgradeArrows[2].color[2], 0.9)
+end
+local unique = {}
+for index = before + 1, #comparisons do unique[comparisons[index]] = (unique[comparisons[index]] or 0) + 1 end
+for _, count in pairs(unique) do equal(count, 2, "each unique item is compared once per enabled profile") end
+before = #comparisons
+FW:RefreshUpgradeIndicators(); pump()
+equal(#comparisons, before, "additional profile markers do not repeat cached comparisons")
+enabledProfiles = {enabledProfiles[2]}
+FW:RefreshUpgradeIndicators(); pump()
+check(currentBank.zvUpgradeArrow.shown and not currentBank.zvUpgradeArrows[2].shown)
+equal(currentBank.zvUpgradeArrow.color[2], 0.9, "removed profiles leave no stale native tint")
 print("Native item-window indicators: " .. checks .. " checks passed.")

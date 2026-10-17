@@ -49,6 +49,8 @@ local function object(name, parent)
         local texture = {shown=false}
         function texture:SetTexture(path) self.path = path end
         function texture:SetSize(w, h) self.w, self.h = w, h end
+        function texture:SetVertexColor(...) self.color = {...} end
+        function texture:ClearAllPoints() self.anchor = nil end
         function texture:SetPoint(...) self.anchor = {...} end
         function texture:Show() self.shown = true end
         function texture:Hide() self.shown = false end
@@ -89,8 +91,8 @@ result("item:103:pending", nil, "pending")
 result("item:104:partial", nil, "partial")
 result("item:105:excluded", nil, "excluded")
 assert(loadfile("Upgrades.lua"))("ZwykValues", FW)
-local realDecision = FW.IsMainProfileUpgrade
-function FW:IsMainProfileUpgrade(link)
+local realDecision = FW.GetItemUpgradeProfiles
+function FW:GetItemUpgradeProfiles(link)
     decisions[link] = (decisions[link] or 0) + 1
     return realDecision(self, link)
 end
@@ -283,4 +285,35 @@ readCount = #reads; pump(); LootFrame_Update()
 equal(#reads,readCount,"disabled loot does no item-link or comparison work")
 check(not event.scripts.OnUpdate and not LootButton1.scripts.OnUpdate,"loot integration adds no polling")
 equal(created,1)
+
+-- Loot slots and pooled roll cards paint each enabled profile with its own
+-- color, sharing the same memoized comparison API as the other item windows.
+local enabledProfiles = {
+    {id="physical",revision=1,color={r=1,g=0.6,b=0.1}},
+    {id="spell",revision=1,color={r=0.7,g=0.2,b=1}},
+}
+function FW:GetUpgradeProfiles() return enabledProfiles end
+FW.DB.options.upgradeBags, FW.DB.options.upgradeRolls = true, true
+FW:InvalidateUpgradeComparisons()
+FW:RefreshUpgradeIndicators(); pump()
+for _, icon in ipairs({LootButton1,dynamic.IconFrame}) do
+    check(shown(icon), "multi-profile loot and roll marker")
+    equal(#icon.zvUpgradeArrows,2)
+    check(icon.zvUpgradeArrows[2].shown)
+    equal(icon.zvUpgradeArrows[1].color[2],0.6)
+    equal(icon.zvUpgradeArrows[2].color[3],1)
+end
+local lootComparisons, rollComparisons = comparisons[links[1]], comparisons[rolls[13]]
+FW:RefreshUpgradeIndicators(); pump()
+equal(comparisons[links[1]],lootComparisons,"multiple loot profiles reuse comparisons")
+equal(comparisons[rolls[13]],rollComparisons,"multiple roll profiles reuse comparisons")
+legacy:Hide()
+check(not LootButton1.zvUpgradeArrows[1].shown and not LootButton1.zvUpgradeArrows[2].shown)
+enabledProfiles = {enabledProfiles[2]}
+FW:RefreshUpgradeIndicators(); pump()
+check(dynamic.IconFrame.zvUpgradeArrows[1].shown and not dynamic.IconFrame.zvUpgradeArrows[2].shown)
+equal(dynamic.IconFrame.zvUpgradeArrow.color[1],0.7)
+FW.DB.options.upgradeRolls = false
+FW:RefreshUpgradeIndicators()
+check(not dynamic.IconFrame.zvUpgradeArrow.shown,"roll toggle clears all profile markers immediately")
 print("Loot and pooled-roll indicators: " .. checks .. " checks passed.")

@@ -89,7 +89,7 @@ assert(FW:SetUpgradeOption("upgradeBags",true) and FW.DB.options.upgradeRolls==f
 assert(refreshes > 0)
 
 -- Decorate received display strings, preserving variants, colors and links.
-local arrow="|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowUp:12:12:0:0|t"
+local arrow="|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowUpWhite:12:12:0:0:16:16:0:16:0:16:89:204:255|t"
 local link="|cff0070dd|Hitem:100|h[Upgrade]|h|r"
 local variant="|cff0070dd|Hitem:100:8481|h[Same base item]|h|r"
 local lower="|cff0070dd|Hitem:101|h[Lower]|h|r"
@@ -136,4 +136,73 @@ ChatFrameUtil=nil
 assert(loadfile("Upgrades.lua"))("ZwykValues",legacy)
 legacy:InstallUpgradeChatHooks()
 assert(legacyAdds==installed)
+
+-- Every independently enabled profile is evaluated and memoized separately.
+assert(FW:SetMainProfile(nil))
+local tank = assert(FW:CreateProfile("Tank", {}))
+local healer = assert(FW:CreateProfile("Healer", {}))
+assert(FW:SetProfileUpgradeEnabled(tank.id, true))
+assert(FW:SetProfileUpgradeEnabled(healer.id, true))
+assert(FW:UpdateProfile(tank.id, {active=false}))
+comparisons["item:200"] = function(profile)
+    return {record={},comparisons={{status=profile.id==tank.id and "upgrade" or "downgrade"}}}
+end
+local beforeMulti = calls
+local matches = FW:GetItemUpgradeProfiles("item:200")
+assert(#matches==1 and matches[1]==tank and calls==beforeMulti+2)
+assert(FW:IsMainProfileUpgrade("item:200") and calls==beforeMulti+2,
+    "complete decisions for all profiles reuse their memo")
+comparisons["item:201"] = {record={},comparisons={{status="upgrade"}}}
+matches = FW:GetItemUpgradeProfiles("item:201")
+assert(#matches==2 and matches[1]==tank and matches[2]==healer,
+    "multiple valid upgrades return profiles in their normal order")
+matches[1]=nil
+assert(#FW:GetItemUpgradeProfiles("item:201")==2, "callers cannot mutate cached result lists")
+assert(FW:UpdateProfile(tank.id, {color={r=1,g=0,b=0},icon=135943}))
+assert(FW:UpdateProfile(healer.id, {color={r=0,g=0,b=1}}))
+assert(FW:SetUpgradeOption("upgradeChat", true))
+local twoProfileLink = "|cff0070dd|Hitem:201|h[Shared upgrade]|h|r"
+local expectedMarkers = "|T135943:12:12:0:0|t|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowUpWhite:12:12:0:0:16:16:0:16:0:16:255:0:0|t " ..
+    "|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowUpWhite:12:12:0:0:16:16:0:16:0:16:0:0:255|t"
+local sharedMessage = FW:DecorateUpgradeChatMessage(twoProfileLink)
+assert(sharedMessage == "|cff0070dd|Hitem:201|h[Shared upgrade]|h " .. expectedMarkers .. "|r",
+    "chat retains each profile's optional icon and color in profile order")
+assert(FW:DecorateUpgradeChatMessage(sharedMessage)==sharedMessage, "multi-profile markers remain idempotent")
+assert(FW:SetProfileUpgradeEnabled(tank.id, false))
+matches = FW:GetItemUpgradeProfiles("item:201")
+assert(#matches==1 and matches[1]==healer)
+assert(FW:SetProfileUpgradeEnabled(tank.id, true))
+
+-- Set identity and set contents form part of a profile's comparison memo.
+assert(FW:UpdateProfile(tank.id, {comparisonTarget={mode="set",setID=3,name="Tank set",character="Player-1"}}))
+local setRevision = 1
+function FW:GetUpgradeBaselineSignature(profile)
+    local target = profile.comparisonTarget
+    return (target.mode=="set" and (target.character .. ":" .. target.setID .. ":" .. setRevision)) or "equipped"
+end
+comparisons["item:202"] = function(profile)
+    return {record={},comparisons={{status=(profile==tank and setRevision==1) and "upgrade" or "downgrade"}}}
+end
+assert(FW:IsMainProfileUpgrade("item:202"))
+local beforeSetUpdate = calls
+setRevision = 2
+assert(not FW:IsMainProfileUpgrade("item:202") and calls==beforeSetUpdate+1,
+    "changed set contents invalidate only the affected profile baseline")
+
+-- Retry incomplete profiles once per second, retaining complete other results.
+local now = 20
+GetTime = function() return now end
+comparisons["item:203"] = function(profile)
+    return {record={partial=profile==tank},comparisons={{status="upgrade"}}}
+end
+matches = FW:GetItemUpgradeProfiles("item:203")
+assert(#matches==1 and matches[1]==healer, "partial totals cannot create a profile marker")
+local beforePartialRetry = calls
+for _=1,50 do assert(#FW:GetItemUpgradeProfiles("item:203")==1) end
+assert(calls==beforePartialRetry, "partial profile retries do not run on every hover frame")
+now = now+1
+comparisons["item:203"] = {record={},comparisons={{status="upgrade"}}}
+matches = FW:GetItemUpgradeProfiles("item:203")
+assert(#matches==2 and calls==beforePartialRetry+1, "only the incomplete profile is retried")
+GetTime = nil
 print("Upgrade profile/chat tests passed")

@@ -48,6 +48,19 @@ function FW:CompareItem(link, profile, baseOnly)
         return nil, record, averageUse and metadata or nil
     end
     local result = {score=score, record=record, comparisons={}}
+    local context = self.GetProfileComparisonContext and self:GetProfileComparisonContext(profile)
+    local setLabel = context and context.mode == "set" and context.label or nil
+    result.baselineLabel = context and context.label
+    if setLabel then result.note = setLabel end
+    local function baselineLink(slot)
+        if context and context.mode == "set" then
+            return context.links[slot], context.slotErrors[slot]
+        end
+        return inventoryLink(slot)
+    end
+    local function note(text)
+        result.note = setLabel and (setLabel .. ". " .. text) or text
+    end
     local function mergeAverageUse(value)
         if not averageUse or not value then return end
         result.hasAverageUse = result.hasAverageUse or value.hasAverageUse
@@ -62,10 +75,20 @@ function FW:CompareItem(link, profile, baseOnly)
         mergeAverageUse(metadata)
     end
     result.hasIssues = (self.ItemHasIssues and self:ItemHasIssues(record, profile)) or record.partial
+    if context and context.error then
+        result.note, result.pending = context.error, true
+        return result
+    end
     local equipLoc = record.equipLoc
     local needsMainType = equipLoc == "INVTYPE_WEAPON" or equipLoc == "INVTYPE_WEAPONMAINHAND" or
         equipLoc == "INVTYPE_WEAPONOFFHAND" or equipLoc == "INVTYPE_SHIELD" or equipLoc == "INVTYPE_HOLDABLE"
-    local mainLink = needsMainType and inventoryLink(16) or nil
+    local mainLink, mainError
+    if needsMainType then mainLink, mainError = baselineLink(16) end
+    if mainError then
+        note(mainError)
+        result.pending = true
+        return result
+    end
     local mainTypeLink = mainLink
     if baseOnly then mainTypeLink = self:GetBaseItemLink(mainLink) end
     local mainType = inventoryType(mainTypeLink)
@@ -73,12 +96,13 @@ function FW:CompareItem(link, profile, baseOnly)
         equipLoc == "INVTYPE_WEAPONMAINHAND" or equipLoc == "INVTYPE_WEAPONOFFHAND" or
         equipLoc == "INVTYPE_SHIELD" or equipLoc == "INVTYPE_HOLDABLE") then
         if self.AwaitItemData then self:AwaitItemData(mainLink) end
-        result.note, result.pending = "Equipped main-hand item data is loading.", true
+        note(setLabel and "Main-hand item data is loading." or "Equipped main-hand item data is loading.")
+        result.pending = true
         return result
     end
     if (equipLoc == "INVTYPE_SHIELD" or equipLoc == "INVTYPE_HOLDABLE" or
         equipLoc == "INVTYPE_WEAPONOFFHAND") and mainType == "INVTYPE_2HWEAPON" then
-        result.note = "Requires a compatible main-hand weapon."
+        note("Requires a compatible main-hand weapon.")
         return result
     end
     local groups = {}
@@ -97,7 +121,11 @@ function FW:CompareItem(link, profile, baseOnly)
     for _, group in ipairs(groups) do
         local comparison = {label=group.label, slots=group.slots, links={}, baseline=0}
         for _, slot in ipairs(group.slots) do
-            local equipped = inventoryLink(slot)
+            local equipped, slotError = baselineLink(slot)
+            if slotError then
+                comparison.error, result.pending = slotError, true
+                break
+            end
             if equipped then
                 comparison.links[#comparison.links+1] = equipped
                 local equippedScore, equippedRecord, _, equippedMetadata = getScore(self, equipped, profile, true)
@@ -121,7 +149,7 @@ function FW:CompareItem(link, profile, baseOnly)
     end
     if equipLoc == "INVTYPE_WEAPON" or equipLoc == "INVTYPE_WEAPONMAINHAND" then
         if mainType == "INVTYPE_2HWEAPON" then
-            result.note = "Single weapon score; a future off-hand is not included."
+            note("Single weapon score; a future off-hand is not included.")
         end
     end
     return result

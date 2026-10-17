@@ -62,4 +62,48 @@ assert(result.hasIssues and result.comparisons[2].hasIssues and result.compariso
 records.ringB.scoreIssues=nil; records.candidate.partial=true
 result=FW:CompareItem("candidate",{id="test"})
 assert(result.hasIssues and result.score==90 and #result.comparisons==2)
+records.candidate.partial=false
+
+-- Profile targets apply to every comparison mode, with no equipped fallback.
+local context={mode="set",label="Set: Healing",links={[11]="ringB",[16]="sword",[17]="shield"},slotErrors={}}
+function FW:GetProfileComparisonContext() return context end
+equipped[11]="ringA"
+result=FW:CompareItem("candidate",{id="test"})
+assert(result.comparisons[1].baseline==80 and result.comparisons[1].delta==10)
+assert(result.comparisons[2].baseline==0 and result.note=="Set: Healing")
+result=FW:CompareItem("twohand",{})
+assert(result.comparisons[1].baseline==150 and result.comparisons[1].delta==-10)
+context.slotErrors[12]="Ignored by set"
+result=FW:CompareItem("candidate",{})
+assert(result.pending and result.comparisons[2].error=="Ignored by set" and result.comparisons[2].delta==nil)
+context.slotErrors[16]="Set main hand unavailable"
+result=FW:CompareItem("shield",{})
+assert(result.pending and #result.comparisons==0 and result.note:find("Set main hand unavailable",1,true))
+context.slotErrors={}; context.links[16]="twohand"; context.links[17]=nil
+result=FW:CompareItem("shield",{})
+assert(#result.comparisons==0 and result.note:find("Requires a compatible",1,true))
+context.error="Set belongs to another character"
+result=FW:CompareItem("candidate",{})
+assert(result.pending and #result.comparisons==0 and result.note==context.error)
+context.error=nil
+local baseCalls, averageCalls={},{}
+function FW:GetBaseItemLink(link) return link end
+function FW:GetBaseScore(link, profile, bypass)
+    baseCalls[#baseCalls+1]={link=link,bypass=bypass}
+    return self:GetScore(link,profile,bypass)
+end
+function FW:GetAverageUseScore(link, profile, bypass)
+    averageCalls[#averageCalls+1]={link=link,bypass=bypass}
+    local score, record=self:GetScore(link,profile,bypass)
+    return score,record,nil,{hasAverageUse=true,averageUseGain=2}
+end
+context.links[11]="ringB"
+result=FW:CompareBaseItem("candidate",{})
+assert(result.comparisons[1].baseline==80 and baseCalls[2].link=="ringB" and baseCalls[2].bypass)
+result=FW:CompareAverageUseItem("candidate",{})
+assert(result.comparisons[1].baseline==80 and result.hasAverageUse and averageCalls[2].bypass)
+context.error="Set unavailable"
+result=FW:CompareAverageUseItem("candidate",{})
+assert(result.pending and result.score==90 and result.hasAverageUse and result.averageUseGain==2,
+    "an unavailable target blocks deltas while preserving the candidate's average-use value")
 print("Comparison tests passed")

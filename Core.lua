@@ -233,6 +233,51 @@ function FW:ValidateProfileIcon(icon)
     return validIcon(icon)
 end
 
+local function validComparisonTarget(target)
+    if not plainObject(target) then return nil, "Comparison target must be a JSON object." end
+    local allowed = {mode=true, setID=true, name=true, character=true}
+    for key in pairs(target) do
+        if not allowed[key] then return nil, "Unknown comparison target field '" .. key .. "'." end
+    end
+    if target.mode == "equipped" then return {mode="equipped"} end
+    if target.mode ~= "set" then return nil, "Comparison target must use equipped items or an equipment set." end
+    if not finite(target.setID) or target.setID < 0 or target.setID ~= math.floor(target.setID) then
+        return nil, "Equipment set ID must be a nonnegative integer."
+    end
+    if type(target.character) ~= "string" or #target.character == 0 or #target.character > 128
+        or target.character:find("[%z\1-\31\127]") then
+        return nil, "Equipment set must identify its character."
+    end
+    local name
+    if target.name ~= nil then
+        name = validName(target.name)
+        if not name then return nil, "Equipment set name must be valid text." end
+    end
+    return {mode="set", setID=target.setID, name=name, character=target.character}
+end
+
+function FW:ValidateComparisonTarget(target)
+    return validComparisonTarget(target)
+end
+
+local function validCalculationOptions(changes, current)
+    if not plainObject(changes) then return nil, "Calculation options must be a JSON object." end
+    local result = {}
+    for _, key in ipairs({"combatShare", "castingShare", "whileCastingRegen"}) do
+        if current then result[key] = current[key] end
+    end
+    for key, value in pairs(changes) do
+        if key ~= "combatShare" and key ~= "castingShare" and key ~= "whileCastingRegen" then
+            return nil, "Unknown calculation option '" .. key .. "'."
+        end
+        if not finite(value) or value < 0 or value > 1 then
+            return nil, "Calculation ratios must be numbers between 0 and 1."
+        end
+        result[key] = value
+    end
+    return result
+end
+
 local function validUnit(unit)
     if unit ~= "percent" and unit ~= "rating" then return nil, "Unsupported secondary stat unit." end
     -- Retain compatibility with old profile envelopes without retaining rating mode.
@@ -309,8 +354,16 @@ function FW:Initialize()
         end
         profile.id, profile.name, profile.weights = id, name, weights
         profile.active = profile.active ~= false
+        profile.upgradeEnabled = profile.upgradeEnabled == true or (not db.options.upgradeProfilesMigrated
+            and profile.upgradeEnabled == nil and db.options.mainProfileID == id)
         profile.color = validColor(profile.color) or { r = defaultColor.r, g = defaultColor.g, b = defaultColor.b }
         profile.icon = validIcon(profile.icon)
+        local target = profile.comparisonTarget
+        -- A broken saved set reference stays unresolved instead of silently
+        -- comparing against currently equipped gear on another character.
+        profile.comparisonTarget = validComparisonTarget(target or {mode="equipped"})
+            or (type(target) == "table" and target.mode == "set" and {mode="set"}) or {mode="equipped"}
+        profile.calculationOptions = profile.calculationOptions and validCalculationOptions(profile.calculationOptions) or nil
         profile.itemFilters = cloneItemFilters(profile.itemFilters)
         profile.revision = finite(profile.revision) and math.max(1, math.floor(profile.revision)) or 1
         if profile.secondaryUnit == "rating" then profile.revision = profile.revision + 1 end
@@ -329,6 +382,7 @@ function FW:Initialize()
     if type(db.options.mainProfileID) ~= "string" or not db.profiles[db.options.mainProfileID] then
         db.options.mainProfileID = nil
     end
+    db.options.upgradeProfilesMigrated = true
     local cache = db.cache
     if type(cache) ~= "table" or cache.version ~= self.CACHE_VERSION then
         db.cache = blankCache()
@@ -361,11 +415,35 @@ function FW:NotifyChanged()
     if self.RefreshUpgradeIndicators then self:RefreshUpgradeIndicators() end
 end
 
--- A single main profile drives optional upgrade markers independently of its
--- tooltip visibility. No profile is chosen implicitly on import or deletion.
+-- Upgrade activation is independent of tooltip visibility. Keep the old main
+-- profile methods as a single-selection compatibility API for older callers.
+function FW:GetUpgradeProfiles()
+    self:Initialize()
+    local profiles = {}
+    for _, id in ipairs(self.DB.profileOrder) do
+        local profile = self.DB.profiles[id]
+        if profile and profile.upgradeEnabled then profiles[#profiles + 1] = profile end
+    end
+    return profiles
+end
+
 function FW:GetMainProfile()
     self:Initialize()
-    return self.DB.profiles[self.DB.options.mainProfileID]
+    local profile = self.DB.profiles[self.DB.options.mainProfileID]
+    if profile and profile.upgradeEnabled then return profile end
+    return self:GetUpgradeProfiles()[1]
+end
+
+function FW:SetProfileUpgradeEnabled(id, enabled)
+    self:Initialize()
+    local profile = self.DB.profiles[id]
+    if not profile then return nil, "Profile not found." end
+    if type(enabled) ~= "boolean" then return nil, "Upgrade activation must be true or false." end
+    if profile.upgradeEnabled ~= enabled then
+        profile.upgradeEnabled = enabled
+        self:NotifyChanged()
+    end
+    return true
 end
 
 function FW:SetMainProfile(id)
@@ -373,10 +451,13 @@ function FW:SetMainProfile(id)
     if id ~= nil and (type(id) ~= "string" or not self.DB.profiles[id]) then
         return nil, "Profile not found."
     end
-    if self.DB.options.mainProfileID ~= id then
-        self.DB.options.mainProfileID = id
-        self:NotifyChanged()
+    local changed = self.DB.options.mainProfileID ~= id
+    for _, profile in ipairs(self:GetProfiles()) do
+        local enabled = profile.id == id
+        if profile.upgradeEnabled ~= enabled then profile.upgradeEnabled, changed = enabled, true end
     end
+    self.DB.options.mainProfileID = id
+    if changed then self:NotifyChanged() end
     return true
 end
 
@@ -404,9 +485,10 @@ function FW:CreateProfile(name, weights)
         db.nextProfileID = db.nextProfileID + 1
     until not db.profiles[id]
     local profile = {
-        id = id, name = checkedName, active = true,
+        id = id, name = checkedName, active = true, upgradeEnabled = false,
         color = { r = defaultColor.r, g = defaultColor.g, b = defaultColor.b },
         weights = checkedWeights, revision = 1, secondaryUnit = "percent", itemFilters = cloneItemFilters(),
+        comparisonTarget = {mode="equipped"},
     }
     db.profiles[id] = profile
     db.profileOrder[#db.profileOrder + 1] = id
@@ -434,7 +516,8 @@ function FW:UpdateProfile(id, changes)
     local profile = self.DB.profiles[id]
     if not profile then return nil, "Profile not found." end
     if not plainObject(changes) then return nil, "Profile changes must be a table." end
-    local allowed = { name = true, active = true, color = true, icon = true, weights = true, secondaryUnit = true, itemFilters = true }
+    local allowed = { name = true, active = true, color = true, icon = true, weights = true, secondaryUnit = true,
+        itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true }
     for key in pairs(changes) do if not allowed[key] then return nil, "Unknown profile field '" .. key .. "'." end end
     local replacement, errorMessage = { secondaryUnit = "percent" }
     if changes.name ~= nil then
@@ -444,6 +527,18 @@ function FW:UpdateProfile(id, changes)
     if changes.active ~= nil then
         if type(changes.active) ~= "boolean" then return nil, "Active must be true or false." end
         replacement.active = changes.active
+    end
+    if changes.upgradeEnabled ~= nil then
+        if type(changes.upgradeEnabled) ~= "boolean" then return nil, "Upgrade activation must be true or false." end
+        replacement.upgradeEnabled = changes.upgradeEnabled
+    end
+    if changes.comparisonTarget ~= nil then
+        replacement.comparisonTarget, errorMessage = validComparisonTarget(changes.comparisonTarget)
+        if not replacement.comparisonTarget then return nil, errorMessage end
+    end
+    if changes.calculationOptions ~= nil and changes.calculationOptions ~= false then
+        replacement.calculationOptions, errorMessage = validCalculationOptions(changes.calculationOptions, profile.calculationOptions)
+        if not replacement.calculationOptions then return nil, errorMessage end
     end
     if changes.color ~= nil then
         replacement.color, errorMessage = validColor(changes.color)
@@ -476,6 +571,7 @@ function FW:UpdateProfile(id, changes)
     end
     for key, value in pairs(replacement) do profile[key] = value end
     if changes.icon == false then profile.icon = nil end
+    if changes.calculationOptions == false then profile.calculationOptions = nil end
     if scoreChanged then
         profile.revision = profile.revision + 1
         clearProfileScores(self.DB, id)
@@ -515,6 +611,8 @@ function FW:CopyProfile(id)
     profile.active = original.active
     profile.color = { r = original.color.r, g = original.color.g, b = original.color.b }
     profile.icon = original.icon
+    profile.comparisonTarget = copySavedTable(original.comparisonTarget)
+    profile.calculationOptions = copySavedTable(original.calculationOptions)
     profile.secondaryUnit = "percent"
     profile.itemFilters = cloneItemFilters(original.itemFilters)
     self:NotifyChanged()
@@ -526,10 +624,11 @@ function FW:ImportProfile(source, fallbackName)
     local decoded, errorMessage = self.JSON.Decode(source)
     if decoded == nil then return nil, errorMessage end
     if not plainObject(decoded) then return nil, "Import must be a weight object or a ZwykValues profile object." end
-    local weights, name, color, icon, unit, filters
+    local weights, name, color, icon, unit, filters, upgradeEnabled, comparisonTarget, calculationOptions
     local warnings = {}
     if decoded.weights ~= nil or decoded.format ~= nil then
-        local allowed = { format = true, version = true, name = true, color = true, icon = true, secondaryUnit = true, weights = true, itemFilters = true }
+        local allowed = { format = true, version = true, name = true, color = true, icon = true, secondaryUnit = true,
+            weights = true, itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true }
         for key in pairs(decoded) do if not allowed[key] then return nil, "Unknown profile field '" .. key .. "'." end end
         if decoded.format ~= "ZwykValues" and decoded.format ~= "ZwykPoints" and decoded.format ~= "ForeverWeights" then
             return nil, "Profile format must be 'ZwykValues', 'ZwykPoints' or 'ForeverWeights'."
@@ -544,6 +643,18 @@ function FW:ImportProfile(source, fallbackName)
         if decoded.icon ~= nil then
             icon, errorMessage = validIcon(decoded.icon)
             if not icon then return nil, errorMessage end
+        end
+        if decoded.upgradeEnabled ~= nil then
+            if type(decoded.upgradeEnabled) ~= "boolean" then return nil, "Upgrade activation must be true or false." end
+            upgradeEnabled = decoded.upgradeEnabled
+        end
+        if decoded.comparisonTarget ~= nil then
+            comparisonTarget, errorMessage = validComparisonTarget(decoded.comparisonTarget)
+            if not comparisonTarget then return nil, errorMessage end
+        end
+        if decoded.calculationOptions ~= nil then
+            calculationOptions, errorMessage = validCalculationOptions(decoded.calculationOptions)
+            if not calculationOptions then return nil, errorMessage end
         end
         unit, errorMessage = validUnit(decoded.secondaryUnit or "percent")
         if not unit then return nil, errorMessage end
@@ -567,6 +678,9 @@ function FW:ImportProfile(source, fallbackName)
     profile, errorMessage = self:CreateProfile(name, weights)
     if not profile then return nil, errorMessage end
     profile.color, profile.icon, profile.secondaryUnit = color, icon, unit
+    profile.upgradeEnabled = upgradeEnabled == true
+    if comparisonTarget then profile.comparisonTarget = comparisonTarget end
+    profile.calculationOptions = calculationOptions
     if filters then profile.itemFilters = filters end
     self:NotifyChanged()
     return profile, nil, warnings
@@ -582,6 +696,9 @@ function FW:ExportProfile(id, bare)
         format = "ZwykValues", version = 1, name = profile.name,
         color = { r = profile.color.r, g = profile.color.g, b = profile.color.b },
         icon = profile.icon,
+        upgradeEnabled = profile.upgradeEnabled == true,
+        comparisonTarget = copySavedTable(profile.comparisonTarget or {mode="equipped"}),
+        calculationOptions = copySavedTable(profile.calculationOptions),
         secondaryUnit = "percent", weights = weights, itemFilters = cloneItemFilters(profile.itemFilters),
     })
 end
@@ -798,7 +915,7 @@ function FW:GetScore(link, profile, ignoreFilters)
 end
 
 -- Average-use values are a separate view of the unenchanted item. They never
--- alter static scores, stat warnings, or main-profile upgrade indicators.
+-- alter static scores, stat warnings, or profile upgrade indicators.
 function FW:GetAverageUseScore(link, profile, ignoreFilters)
     self:Initialize()
     if type(profile) == "string" then profile = self.DB.profiles[profile] end

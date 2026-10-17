@@ -96,6 +96,11 @@ function methods:SetFrameLevel(value) self.level = value end
 function methods:GetFrameLevel() return self.level or 1 end
 function methods:Raise() self.raised = (self.raised or 0) + 1 end
 function methods:SetScrollChild(child) self.scrollChild = child end
+function methods:SetMinMaxValues(low, high) self.minValue, self.maxValue = low, high end
+function methods:SetValueStep(value) self.valueStep = value end
+function methods:SetObeyStepOnDrag(value) self.obeyStep = value end
+function methods:SetValue(value) self.value = value self:Fire("OnValueChanged", value) end
+function methods:GetValue() return self.value end
 function methods:GetVerticalScroll() return self.scroll end
 function methods:SetVerticalScroll(value) self.scroll = value end
 function methods:GetVerticalScrollRange() return math.max(0, self.scrollChild:GetHeight() - self:GetHeight()) end
@@ -146,7 +151,7 @@ local popup
 StaticPopup_Show = function(kind, _, _, data) popup = { kind = kind, data = data } end
 
 local FW = {}
-for _, file in ipairs({ "JSON.lua", "Stats.lua", "Core.lua", "IconCatalog.lua", "UI.lua" }) do assert(loadfile(addonPath .. "/" .. file))("ZwykValues", FW) end
+for _, file in ipairs({ "JSON.lua", "Stats.lua", "Core.lua", "IconCatalog.lua", "DerivedWeights.lua", "UI.lua" }) do assert(loadfile(addonPath .. "/" .. file))("ZwykValues", FW) end
 local tooltipRefreshes, upgradeRefreshes = 0, 0
 function FW:RefreshTooltips() tooltipRefreshes = tooltipRefreshes + 1 end
 function FW:RefreshUpgradeIndicators() upgradeRefreshes = upgradeRefreshes + 1 end
@@ -650,6 +655,131 @@ check(not iconDialog:IsShown(), "closing the editor closes its icon picker")
 FW:ShowUI()
 equal(catalogCalls, 4, "profile and editor refreshes do not reload the icon catalog")
 
+-- Weight calculators read the current draft and require the normal Apply action.
+UnitLevel = function() return 29 end
+UnitStat = function() return 100, 100, 0, 0 end
+local talentRank = 3
+C_ClassTalents = { GetActiveConfigID = function() return 1 end }
+C_Traits = { GetNodeInfo = function(_, node) return { activeRank = node == 110871 and talentRank or 0 } end }
+local function gear(key)
+    return find(function(control) return control.isDerivedWeight and control.statKey == key end)
+end
+local calculationProfile = assert(FW:CreateProfile("Calculated profile", {}))
+find(function(control) return control.kind == "Button" and control.profileID == calculationProfile.id end):Fire("OnClick")
+userText(weightBox("Attack power"), "3")
+userText(weightBox("Block value"), "4")
+local calculatorLines = {}
+GameTooltip.SetOwner = function() end
+GameTooltip.SetText = function(_, title) tooltipTitle = title end
+GameTooltip.AddLine = function(_, line) calculatorLines[#calculatorLines + 1] = line end
+gear("strength"):Fire("OnEnter")
+equal(tooltipTitle, "Calculate Strength weight", "gear tooltip identifies the target attribute")
+check(table.concat(calculatorLines, "\n"):find("PALADIN", 1, true), "gear tooltip includes player class")
+check(table.concat(calculatorLines, "\n"):find("29", 1, true), "gear tooltip includes player level")
+check(table.concat(calculatorLines, "\n"):find("Attack power", 1, true), "gear tooltip names the input weights")
+gear("strength"):Fire("OnClick")
+check(math.abs(tonumber(strength:GetText()) - 6.2) < 0.000001, "gear calculates from unsaved source weights")
+equal(calculationProfile.weights.strength, 0, "gear leaves saved weights unchanged")
+FW:RefreshUI()
+check(math.abs(tonumber(strength:GetText()) - 6.2) < 0.000001, "refresh preserves the calculated draft")
+local spirit, mp5 = weightBox("Spirit"), weightBox("Mana per 5 seconds")
+userText(mp5, "4")
+gear("spirit"):Fire("OnClick")
+local calculationDialog = ZwykValuesWeightCalculation
+check(calculationDialog:IsShown(), "Spirit gear opens a regeneration prompt")
+check(not calculationDialog.sliders[1]:IsShown(), "Spirit prompt omits combat share")
+equal(calculationDialog.sliders[2]:GetValue(), 80, "Spirit prompt starts with a visible casting assumption")
+equal(calculationDialog.sliders[3]:GetValue(), 30, "Spirit prompt defaults from current Reverence talent rank")
+calculationDialog.cancel:Fire("OnClick")
+talentRank = 1
+gear("spirit"):Fire("OnClick")
+equal(calculationDialog.sliders[3]:GetValue(), 10, "opening an unsaved prompt reads current talents again")
+calculationDialog.cancel:Fire("OnClick")
+talentRank = 3
+gear("spirit"):Fire("OnClick")
+calculationDialog.sliders[2]:SetValue(100)
+calculationDialog.sliders[3]:SetValue(30)
+check(calculationDialog.use.enabled, "valid regeneration ratios allow using the result")
+calculationDialog.use:Fire("OnClick")
+check(not calculationDialog:IsShown(), "using the calculated weight closes its prompt")
+check(math.abs(tonumber(spirit:GetText()) - 0.75) < 0.000001, "Spirit draft includes the selected casting regeneration ratio")
+equal(calculationProfile.calculationOptions, nil, "regeneration assumptions stay unsaved until Apply")
+equal(calculationProfile.weights.spirit, 0, "Spirit calculation is a draft")
+gear("spirit"):Fire("OnClick")
+equal(calculationDialog.sliders[2]:GetValue(), 100, "reopening keeps the draft casting assumption")
+equal(calculationDialog.sliders[3]:GetValue(), 30, "reopening keeps the draft regeneration assumption")
+calculationDialog.sliders[3]:SetValue(55)
+calculationDialog.cancel:Fire("OnClick")
+gear("mp5"):Fire("OnClick")
+check(calculationDialog.sliders[1]:IsShown(), "MP5 prompt includes combat share")
+equal(calculationDialog.sliders[3]:GetValue(), 30, "Cancel discards unaccepted ratio edits")
+calculationDialog.sliders[1]:SetValue(100)
+calculationDialog.sliders[2]:SetValue(100)
+calculationDialog.sliders[3]:SetValue(0)
+check(not calculationDialog.use.enabled, "zero Spirit regeneration disables inverse MP5 calculation")
+check(calculationDialog.details:GetText():find("Spirit gives no mana", 1, true), "unavailable inverse result explains the zero denominator")
+calculationDialog.sliders[1]:SetValue(0)
+check(calculationDialog.use.enabled, "changing combat ratio can restore the MP5 calculation")
+calculationDialog.use:Fire("OnClick")
+check(math.abs(tonumber(mp5:GetText()) - 1.2) < 0.000001, "MP5 draft uses the explicit out-of-combat ratio")
+click("Apply weights")
+check(math.abs(calculationProfile.weights.strength - 6.2) < 0.000001, "Apply saves calculated attribute weights")
+check(math.abs(calculationProfile.weights.spirit - 0.75) < 0.000001, "Apply saves calculated regeneration weights")
+equal(calculationProfile.calculationOptions.combatShare, 0, "Apply saves chosen combat ratio")
+equal(calculationProfile.calculationOptions.castingShare, 1, "Apply saves chosen casting ratio")
+equal(calculationProfile.calculationOptions.whileCastingRegen, 0, "Apply saves chosen retained regeneration")
+gear("spirit"):Fire("OnClick")
+equal(calculationDialog.sliders[3]:GetValue(), 0, "saved user regeneration overrides talent defaults")
+local staleCalculation = calculationDialog.use:GetScript("OnClick")
+FW.UI:Hide()
+check(not calculationDialog:IsShown(), "closing the editor closes the calculation prompt")
+FW:ShowUI()
+
+-- The comparison selector preserves draft weights and never replaces an invalid set.
+local setAvailable, setLookups = true, 0
+local chosenSet = { mode = "set", setID = 7, name = "Spell gear", character = "Player-UI-Test" }
+function FW:GetEquipmentSetOptions()
+    setLookups = setLookups + 1
+    return setAvailable and { { setID = 7, name = chosenSet.name, character = chosenSet.character, icon = 135920, target = chosenSet } } or {},
+        not setAvailable and "The selected equipment set was deleted." or nil
+end
+function FW:GetProfileComparisonContext(candidate)
+    local target = candidate and candidate.comparisonTarget
+    if not target or target.mode == "equipped" then return { mode = "equipped", label = "Currently equipped" } end
+    return { mode = "set", label = "Set: " .. target.name, error = not setAvailable and "The selected equipment set was deleted." or nil }
+end
+local comparisonButton = byText("Compare: Equipped", "FontString").parent
+comparisonButton:Fire("OnClick")
+local comparisonDialog = ZwykValuesComparisonPicker
+check(comparisonDialog:IsShown(), "comparison button opens the equipment target selector")
+equal(setLookups, 1, "opening the selector requests current set choices once")
+equal(#comparisonDialog.rows, 2, "selector offers equipped gear and native sets")
+userText(strength, "8.75")
+comparisonDialog.rows[2]:Fire("OnClick")
+equal(calculationProfile.comparisonTarget.setID, 7, "choosing a set saves its native set ID")
+equal(calculationProfile.comparisonTarget.character, chosenSet.character, "choosing a set saves its character identity")
+equal(strength:GetText(), "8.75", "choosing a comparison target preserves unsaved weights")
+equal(comparisonButton.children[1]:GetText(), "Set: Spell gear", "comparison button identifies the selected set")
+check(not comparisonDialog:IsShown(), "choosing a target closes the selector")
+setAvailable = false
+FW:RefreshUI()
+equal(comparisonButton.children[1]:GetText(), "Compare: Unavailable", "deleted set is visibly unavailable")
+equal(calculationProfile.comparisonTarget.setID, 7, "unavailable set is kept as the selected target")
+comparisonButton:Fire("OnClick")
+check(comparisonDialog.message:GetText():find("deleted", 1, true), "selector explains why the chosen set is unavailable")
+check(not comparisonDialog.rows[2]:IsShown(), "deleted set is absent from current choices")
+comparisonDialog.rows[1]:Fire("OnClick")
+equal(calculationProfile.comparisonTarget.mode, "equipped", "equipped gear is restored only through an explicit choice")
+setAvailable = true
+comparisonButton:Fire("OnClick")
+local staleComparison = comparisonDialog.rows[2]:GetScript("OnClick")
+FW:DeleteProfile(calculationProfile.id)
+check(not comparisonDialog:IsShown(), "deleting the selected profile closes its target selector")
+staleComparison()
+staleCalculation()
+equal(profile.weights.strength, 4, "stale calculation callbacks do not change another profile")
+equal(profile.comparisonTarget.mode, "equipped", "stale target callbacks do not change another profile")
+
 local debug = find(function(control) return control.optionKey == "debugUnknownStats" end)
 check(not debug:GetChecked(), "unknown-stat debug option starts disabled")
 debug:SetChecked(true)
@@ -661,10 +791,10 @@ debug:SetChecked(false)
 debug:Fire("OnClick")
 equal(FW.DB.options.debugUnknownStats, false, "debug checkbox can disable warnings")
 
-local main = byText("Main for upgrade arrows", "FontString").parent
-local mainName = byText("Main: None", "FontString")
-equal(FW:GetMainProfile(), nil, "arrows start with no main profile")
-check(not main:GetChecked(), "selected profile is not main by default")
+local main = byText("Use this profile", "FontString").parent
+local mainName = byText("Upgrade arrows (0)", "FontString")
+equal(#FW:GetUpgradeProfiles(), 0, "arrows start with no selected profiles")
+check(not main:GetChecked(), "selected profile is not enabled for arrows by default")
 local arrowControls = {}
 equal(byText("Item windows", "FontString").parent.optionKey, "upgradeBags", "item-window arrows retain the existing bag-arrow preference")
 for _, key in ipairs({ "upgradeBags", "upgradeRolls", "upgradeChat" }) do
@@ -676,19 +806,19 @@ for _, key in ipairs({ "upgradeBags", "upgradeRolls", "upgradeChat" }) do
     control:Fire("OnClick")
     equal(FW.DB.options[key], true, key .. " can be enabled independently")
     equal(upgradeRefreshes, before + 1, key .. " immediately refreshes upgrade indicators")
-    equal(FW:GetMainProfile(), nil, "location toggles do not implicitly choose a main profile")
+    equal(#FW:GetUpgradeProfiles(), 0, "location toggles do not implicitly choose upgrade profiles")
 end
 main:SetChecked(true)
 local beforeMainRefresh = upgradeRefreshes
 main:Fire("OnClick")
-equal(FW:GetMainProfile(), profile, "selected profile can be designated main")
-equal(mainName:GetText(), "Main: " .. profile.name, "main name appears in upgrade panel")
+equal(FW:GetUpgradeProfiles()[1], profile, "selected profile can drive upgrade arrows")
+equal(mainName:GetText(), "Upgrade arrows (1)", "enabled count appears in upgrade panel")
 equal(upgradeRefreshes, beforeMainRefresh + 1, "main selection immediately refreshes arrows")
 local active = byText("Active in tooltips", "FontString").parent
 active:SetChecked(false)
 active:Fire("OnClick")
 check(not profile.active, "tooltip visibility can be disabled on the main profile")
-equal(FW:GetMainProfile(), profile, "main profile remains chosen while inactive in tooltips")
+equal(FW:GetUpgradeProfiles()[1], profile, "arrow profile remains chosen while inactive in tooltips")
 check(main:GetChecked(), "main checkbox stays checked after tooltip visibility changes")
 
 click("Copy")
@@ -708,15 +838,17 @@ find(function(control) return control.kind == "Button" and control.profileID == 
 check(weaponFilter:GetChecked(), "switching back restores the copied profile filter")
 click("Done")
 check(not main:GetChecked(), "copying a main profile does not designate the copy main")
-equal(FW:GetMainProfile(), profile, "copy leaves original main designation intact")
+equal(FW:GetUpgradeProfiles()[1], profile, "copy leaves original arrow activation intact")
 main:SetChecked(true)
 main:Fire("OnClick")
-equal(FW:GetMainProfile(), copied, "choosing a second main replaces the first")
-equal(mainName:GetText(), "Main: " .. copied.name, "main display follows chosen profile")
+equal(#FW:GetUpgradeProfiles(), 2, "enabling a second arrow profile retains the first")
+equal(FW:GetUpgradeProfiles()[2], copied, "second selected profile drives arrows too")
+equal(mainName:GetText(), "Upgrade arrows (2)", "enabled count includes both profiles")
 main:SetChecked(false)
 main:Fire("OnClick")
-equal(FW:GetMainProfile(), nil, "main checkbox can clear the main profile")
-equal(mainName:GetText(), "Main: None", "clearing main displays None")
+equal(#FW:GetUpgradeProfiles(), 1, "checkbox clears only the selected arrow profile")
+equal(FW:GetUpgradeProfiles()[1], profile, "clearing a second profile retains the first")
+equal(mainName:GetText(), "Upgrade arrows (1)", "enabled count follows independent activation")
 for index, key in ipairs({ "upgradeBags", "upgradeRolls", "upgradeChat" }) do
     equal(FW.DB.options[key], true, "clearing main preserves " .. key .. " preference")
     arrowControls[index]:SetChecked(false)
@@ -800,6 +932,26 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     within(iconControl, FW.UI, "optional icon control fits minimum editor width")
     separate(iconControl, swatch, "icon picker does not overlap the color square")
     within(iconDialog, FW.UI, "icon dialog fits minimum editor size")
+    within(comparisonDialog, FW.UI, "comparison target selector fits minimum editor size")
+    within(comparisonDialog.message, comparisonDialog, "comparison status fits its selector")
+    within(comparisonDialog.scroll, comparisonDialog, "comparison choices fit their selector")
+    within(calculationDialog, FW.UI, "regeneration prompt fits minimum editor size")
+    within(calculationDialog.help, calculationDialog, "calculation help fits its prompt")
+    within(calculationDialog.detailsScroll, calculationDialog, "long conversion formulas stay in a scrollable area")
+    within(calculationDialog.use, calculationDialog, "calculated-weight action fits its prompt")
+    separate(calculationDialog.detailsScroll, calculationDialog.use, "conversion details leave room for calculation action")
+    for _, slider in ipairs(calculationDialog.sliders) do
+        within(slider, calculationDialog, "regeneration slider fits its prompt")
+        within(slider.caption, calculationDialog, "regeneration ratio label fits its prompt")
+        separate(slider, calculationDialog.detailsScroll, "sliders leave room for conversion details")
+    end
+    for _, key in ipairs({ "strength", "agility", "stamina", "intellect", "spirit", "mp5", "defense" }) do
+        local control = gear(key)
+        within(control, control.parent, "calculation gear fits the attribute row")
+        local fieldLabel = control.parent.children[1]
+        separate(control, fieldLabel, "calculation gear leaves room for the attribute label")
+        check(control:GetScript("OnUpdate") == nil, "calculation gear performs no per-frame work")
+    end
     within(iconDialog.search, iconDialog, "icon search fits the picker")
     within(iconDialog.count, iconDialog, "match count fits the picker")
     for index, control in ipairs(iconDialog.categories) do
@@ -829,7 +981,9 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     local upgradePanel = main.parent
     within(upgradePanel, FW.UI, "upgrade panel fits minimum editor size")
     within(mainName, upgradePanel, "main name fits upgrade panel")
-    within(byText("Main for upgrade arrows", "FontString"), upgradePanel, "main checkbox label fits compact panel")
+    within(byText("Use this profile", "FontString"), upgradePanel, "profile checkbox label fits compact panel")
+    within(comparisonButton, upgradePanel, "comparison target button fits the compact upgrade panel")
+    separate(main, comparisonButton, "upgrade activation leaves room for target selection")
     separate(ZwykValuesProfilesScroll, upgradePanel, "profile list leaves room for upgrade settings")
     separate(upgradePanel, byText("New", "Button"), "upgrade settings leave room for profile buttons")
     check(ZwykValuesProfilesScroll:GetHeight() >= 170, "compact settings retain useful profile list height")
@@ -837,6 +991,7 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
         within(control, upgradePanel, "arrow location checkbox fits panel")
         for _, child in ipairs(control.children) do within(child, upgradePanel, "arrow location label fits panel") end
         separate(main, control, "main choice does not overlap arrow locations")
+        separate(comparisonButton, control, "target selector does not overlap arrow location controls")
     end
     separate(arrowControls[1], arrowControls[2], "bag and roll arrow toggles do not overlap")
     separate(arrowControls[2], arrowControls[3], "roll and chat arrow toggles do not overlap")
@@ -847,6 +1002,8 @@ for _, existing in ipairs(remaining) do FW:DeleteProfile(existing.id) end
 check(not byText("Item filters", "Button").enabled, "filter button is disabled without a profile")
 check(not swatch.enabled, "color picker square is disabled without a profile")
 check(not iconControl.enabled, "icon picker is disabled without a profile")
+check(not comparisonButton.enabled, "comparison selector is disabled without a profile")
+check(not gear("strength").enabled and not gear("spirit").enabled, "calculation gears are disabled without a profile")
 check(not otherClasses.enabled and not weaponFilter.enabled and not armorFilter.enabled, "open filters disable their controls when the profile is deleted")
 local restored = assert(FW:CreateProfile("Restored profile", {}))
 check(byText("Item filters", "Button").enabled, "creating a profile re-enables filters")

@@ -1,6 +1,6 @@
 local addonName, FW = ...
 _G.ZwykValues = FW
-FW.version = "0.1.19"
+FW.version = "0.1.20"
 
 function FW:Print(message)
     local text = "|cff80ccffZwykValues:|r " .. tostring(message)
@@ -78,6 +78,22 @@ eventFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
 eventFrame:RegisterEvent("PLAYER_LEVEL_UP")
 eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 pcall(eventFrame.RegisterEvent, eventFrame, "ITEM_DATA_LOAD_RESULT")
+local setEvents = {
+    EQUIPMENT_SETS_CHANGED=true, EQUIPMENT_SWAP_FINISHED=true, BAG_UPDATE_DELAYED=true,
+    BANKFRAME_OPENED=true, BANKFRAME_CLOSED=true, PLAYERBANKSLOTS_CHANGED=true,
+    PLAYERBANKBAGSLOTS_CHANGED=true, PLAYER_ENTERING_WORLD=true,
+}
+for event in pairs(setEvents) do pcall(eventFrame.RegisterEvent, eventFrame, event) end
+local function invalidateSets()
+    if FW.InvalidateEquipmentSetBaselines then FW:InvalidateEquipmentSetBaselines() end
+end
+local function hasSetProfiles(activeOnly)
+    if not FW.GetProfiles then return false end
+    for _, profile in ipairs(FW:GetProfiles(activeOnly)) do
+        if profile.comparisonTarget and profile.comparisonTarget.mode == "set" then return true end
+    end
+    return false
+end
 eventFrame:SetScript("OnEvent", function(_, event, arg1, success)
     if event == "ADDON_LOADED" then
         if arg1 == addonName then
@@ -94,20 +110,29 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, success)
         if FW.DB and FW.InstallCharacterSheetButton then FW:InstallCharacterSheetButton() end
         if FW.DB and FW.InstallBlizzardOptions then FW:InstallBlizzardOptions() end
         if FW.DB and FW.InstallAuctionUpgradeIndicators then FW:InstallAuctionUpgradeIndicators() end
+        if FW.DB then invalidateSets() end
     elseif not FW.DB then return
+    elseif setEvents[event] then
+        invalidateSets()
+        if hasSetProfiles() and FW.RefreshUpgradeIndicators then FW:RefreshUpgradeIndicators() end
+        if hasSetProfiles(true) then FW:RefreshTooltips() end
+        if event == "EQUIPMENT_SETS_CHANGED" and FW.RefreshUI then FW:RefreshUI() end
     elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "UNIT_INVENTORY_CHANGED" then
         if event == "UNIT_INVENTORY_CHANGED" and arg1 ~= "player" then return end
         FW.equipmentRevision = (FW.equipmentRevision or 0) + 1
+        invalidateSets()
         if FW.InvalidateRecentItemReads then FW:InvalidateRecentItemReads() end
         if FW.InvalidateUpgradeComparisons then FW:InvalidateUpgradeComparisons() end
         FW:RefreshTooltips()
     elseif event == "PLAYER_LEVEL_UP" then
+        invalidateSets()
         FW:InvalidateCache()
     else
         -- Cached native queries can emit these events too. Only an awaited
         -- completion can change our data; otherwise this feeds bag redraws.
         local changed = FW.OnItemDataLoaded and FW:OnItemDataLoaded(arg1, success)
         if not changed then return end
+        invalidateSets()
         if FW.InvalidateUpgradeComparisons then FW:InvalidateUpgradeComparisons() end
         if FW.RefreshUpgradeIndicators then FW:RefreshUpgradeIndicators() end
         -- Only refresh a hovered loading item. Do not redraw on each unrelated
@@ -122,6 +147,12 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, success)
                     relevant = true; break
                 end
             end
+        end
+        if hovered and not relevant then
+            -- A set location can be unresolved until this awaited load finishes.
+            -- Only meaningful requested loads reach this branch, never general
+            -- native cache notifications that caused the previous hover loop.
+            relevant = hasSetProfiles(true)
         end
         if relevant then FW:RefreshTooltips() end
     end

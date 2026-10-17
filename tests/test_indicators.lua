@@ -11,7 +11,7 @@ end
 C_Timer = { After = function(delay, callback) assert(delay == 0); timers[#timers+1] = callback end }
 
 local function object(name, parent)
-    local frame = { name = name, parent = parent, shown = true, scripts = {}, hooks = {}, events = {}, textures = {}, id = 1 }
+    local frame = { name = name, parent = parent, shown = true, scripts = {}, hooks = {}, events = {}, textures = {}, labels = {}, id = 1 }
     function frame:GetName() return self.name end
     function frame:GetParent() return self.parent end
     function frame:GetID() return self.id end
@@ -37,9 +37,24 @@ local function object(name, parent)
         function texture:Show() self.shown = true end
         function texture:SetTexture(path) self.path = path end
         function texture:SetSize(w, h) self.w, self.h = w, h end
+        function texture:SetVertexColor(...) self.color = {...} end
+        function texture:ClearAllPoints() self.anchor = nil end
         function texture:SetPoint(...) self.anchor = {...} end
         self.textures[#self.textures+1] = texture
         return texture
+    end
+    function frame:CreateFontString(_, layer, template)
+        assert(layer == "OVERLAY" and template == "GameFontNormalSmall")
+        local label = {shown=false}
+        function label:SetText(value) self.text = value end
+        function label:SetTextColor(...) self.color = {...} end
+        function label:SetShadowOffset(...) self.shadow = {...} end
+        function label:SetPoint(...) self.anchor = {...} end
+        function label:ClearAllPoints() self.anchor = nil end
+        function label:Show() self.shown = true end
+        function label:Hide() self.shown = false end
+        self.labels[#self.labels+1] = label
+        return label
     end
     return frame
 end
@@ -224,4 +239,60 @@ C_Timer = nil
 verdicts["item:104"] = false
 FW:RefreshUpgradeIndicators(); assert(eventFrame.scripts.OnUpdate)
 eventFrame:Fire("OnUpdate"); assert(not eventFrame.scripts.OnUpdate and not late.IconFrame.zvUpgradeArrow.shown)
+
+-- All profile decisions arrive in one call. Match colors retain their order,
+-- and large lists use a compact overflow count instead of covering the icon.
+FW.DB.options.upgradeBags = true
+local multiOwner, multi = object("MultiProfileOwner"), object("MultiProfileItem")
+multi.icon = {}
+local profiles = {
+    {id="healer", color={r=0.1,g=0.9,b=0.2}},
+    {id="tank", color={r=0.2,g=0.4,b=1}},
+    {id="caster", color={r=1,g=0.1,b=0.8}},
+    {id="fourth", color={r=1,g=1,b=0.2}},
+    {id="fifth", color={r=1,g=0.5,b=0}},
+}
+local profileCalls = 0
+function FW:GetItemUpgradeProfiles(link)
+    assert(link == "item:777")
+    profileCalls = profileCalls + 1
+    return profiles
+end
+callCount = #scored
+assert(FW:RegisterUpgradeItemButton(multi, function() return "item:777" end, {owner=multiOwner, anchor=multi.icon}))
+assert(profileCalls == 1 and #scored == callCount, "multi-profile paint must not also call the boolean API")
+assert(#multi.zvUpgradeArrows == 3 and #multi.textures == 3)
+for index, texture in ipairs(multi.zvUpgradeArrows) do
+    local color = profiles[index].color
+    assert(texture.shown and texture.path == "Interface\\AddOns\\ZwykValues\\Textures\\ArrowUpWhite")
+    assert(texture.w == 12 and texture.h == 12 and texture.anchor[2] == multi.icon and texture.anchor[4] == (index-1)*10)
+    assert(texture.color[1] == color.r and texture.color[2] == color.g and texture.color[3] == color.b and texture.color[4] == 1)
+end
+assert(multi.zvUpgradeArrow == multi.zvUpgradeArrows[1])
+assert(multi.zvUpgradeOverflow.shown and multi.zvUpgradeOverflow.text == "+2")
+multiOwner:Hide()
+for _, texture in ipairs(multi.zvUpgradeArrows) do assert(not texture.shown) end
+assert(not multi.zvUpgradeOverflow.shown)
+multi:Show(); assert(profileCalls == 1, "hidden owners do not request profile comparisons")
+multiOwner:Show(); multi:Show()
+assert(profileCalls == 2 and multi.zvUpgradeOverflow.shown)
+
+-- Repainting fewer/different profiles reuses textures, resets tint and size,
+-- and clears stale markers and overflow on pooled buttons immediately.
+profiles = {{id="new", color={r=0.6,g=0.3,b=0.9}}}
+multi:Show()
+assert(profileCalls == 3 and #multi.textures == 3 and #multi.labels == 1)
+assert(multi.zvUpgradeArrow.shown and multi.zvUpgradeArrow.w == 16 and multi.zvUpgradeArrow.color[1] == 0.6)
+assert(not multi.zvUpgradeArrows[2].shown and not multi.zvUpgradeArrows[3].shown and not multi.zvUpgradeOverflow.shown)
+multi:SetID(2)
+assert(not multi.zvUpgradeArrow.shown, "a recycled slot clears every profile before its new provider settles")
+multi:Show(); assert(multi.zvUpgradeArrow.shown)
+profiles = {}
+multi:Show()
+for _, texture in ipairs(multi.zvUpgradeArrows) do assert(not texture.shown) end
+assert(not multi.zvUpgradeOverflow.shown and #scored == callCount, "an empty profile list must not fall back to the main-profile API")
+
+-- An unavailable profile API clears decorations without leaking an error.
+function FW:GetItemUpgradeProfiles() error("profile data unavailable") end
+multi:Show(); assert(not multi.zvUpgradeArrow.shown)
 print("upgrade indicators tests passed")

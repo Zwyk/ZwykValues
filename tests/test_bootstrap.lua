@@ -2,6 +2,7 @@ local FW = {}
 local counts={initialize=0,hooks=0,refresh=0,invalidate=0,loaded=0,ui=0,
     upgradeInvalidations=0,indicators=0,recentInvalidations=0,characterButton=0,blizzardOptions=0,auctionIndicators=0}
 local messages, equip, hovered = {}, {}, nil
+local profiles = {}
 local events, eventHandler
 DEFAULT_CHAT_FRAME={AddMessage=function(_,message) messages[#messages+1]=message end}
 SlashCmdList={}
@@ -29,6 +30,15 @@ function FW:InvalidateCache() counts.invalidate=counts.invalidate+1 end
 function FW:InvalidateRecentItemReads() counts.recentInvalidations=counts.recentInvalidations+1 end
 function FW:InvalidateUpgradeComparisons() counts.upgradeInvalidations=counts.upgradeInvalidations+1 end
 function FW:RefreshUpgradeIndicators() counts.indicators=counts.indicators+1 end
+function FW:InvalidateEquipmentSetBaselines() counts.sets=(counts.sets or 0)+1 end
+function FW:RefreshUI() counts.editor=(counts.editor or 0)+1 end
+function FW:GetProfiles(activeOnly)
+    local selected={}
+    for _,profile in ipairs(profiles) do
+        if not activeOnly or profile.active then selected[#selected+1]=profile end
+    end
+    return selected
+end
 function FW:OnItemDataLoaded(id,success)
     local pending=self.PendingItems and self.PendingItems[id]
     if self.PendingItems then self.PendingItems[id]=nil end
@@ -169,4 +179,37 @@ assert(counts.refresh==before+1 and FW.equipmentRevision==revision+1,
     "in-place equipment/enchant updates invalidate upgrade decisions")
 assert(counts.recentInvalidations==recentBefore+1 and counts.upgradeInvalidations==upgradesBefore+1,
     "player inventory changes invalidate recent item reads and upgrade decisions together")
+
+-- Set snapshots are invalidated when their item locations or saved definitions
+-- can change, without rebuilding ordinary equipped tooltips on bag events.
+for _,event in ipairs({"EQUIPMENT_SETS_CHANGED","EQUIPMENT_SWAP_FINISHED","BAG_UPDATE_DELAYED","BANKFRAME_OPENED",
+    "BANKFRAME_CLOSED","PLAYERBANKSLOTS_CHANGED","PLAYERBANKBAGSLOTS_CHANGED","PLAYER_ENTERING_WORLD"}) do
+    assert(events[event],"Missing set-location event: "..event)
+    local oldSets,oldRefresh=counts.sets,counts.refresh
+    fire(event)
+    assert(counts.sets==oldSets+1 and counts.refresh==oldRefresh,
+        "Set cache events must leave equipped-only tooltips alone")
+end
+profiles={{active=true,comparisonTarget={mode="set"}}}
+local oldRefresh,oldIndicators=counts.refresh,counts.indicators
+fire("BAG_UPDATE_DELAYED")
+assert(counts.refresh==oldRefresh+1 and counts.indicators==oldIndicators+1,
+    "Moving a saved-set item refreshes its tooltip and arrow comparisons")
+local oldEditor=counts.editor
+fire("EQUIPMENT_SETS_CHANGED")
+assert(counts.editor==oldEditor+1,"Renames/deletions update the set selector")
+hovered="item:100:0"
+oldRefresh=counts.refresh
+FW.PendingItems[900]=true
+fire("GET_ITEM_INFO_RECEIVED",900,true)
+assert(counts.refresh==oldRefresh+1,
+    "An awaited load can resolve a selected set location outside the equipped slots")
+completed=redrawState()
+fire("GET_ITEM_INFO_RECEIVED",900,true)
+unchanged(completed,"Unsolicited set-item events must not start a hover refresh loop")
+profiles[1].active=false
+oldRefresh,oldIndicators=counts.refresh,counts.indicators
+fire("BANKFRAME_OPENED")
+assert(counts.refresh==oldRefresh and counts.indicators==oldIndicators+1,
+    "A tooltip-inactive set profile can still drive arrow refreshes")
 print("Bootstrap tests passed")

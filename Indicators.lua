@@ -5,6 +5,8 @@ local _, FW = ...
 -- Only those known owners are visited; no global frame-discovery walk is used.
 local buttons, containers, hookTargets, owners, windows = {}, {}, {}, {}, {}
 local arrowTexture = "Interface\\AddOns\\ZwykValues\\Textures\\ArrowUp"
+local profileArrowTexture = "Interface\\AddOns\\ZwykValues\\Textures\\ArrowUpWhite"
+local MAX_PROFILE_MARKERS = 3
 local refreshPending = false
 local betterBagsItems = setmetatable({}, { __mode = "k" })
 local betterBagsEvents, betterBagsMessages
@@ -33,28 +35,89 @@ local function enabled(option)
 end
 
 local function hide(entry)
-    if entry and entry.texture then entry.texture:Hide() end
+    if not entry then return end
+    for _, texture in ipairs(entry.textures or {}) do texture:Hide() end
+    if entry.overflow then entry.overflow:Hide() end
+end
+
+local function marker(button, entry, index)
+    entry.textures = entry.textures or {}
+    if entry.textures[index] then return entry.textures[index] end
+    if type(button.CreateTexture) ~= "function" then return end
+    local ok, texture = pcall(button.CreateTexture, button, nil, "OVERLAY", nil, 7)
+    if not ok or not texture then return end
+    entry.textures[index] = texture
+    -- Keep the original first-marker handle for existing integrations.
+    if index == 1 then entry.texture, button.zvUpgradeArrow = texture, texture end
+    button.zvUpgradeArrows = entry.textures
+    return texture
+end
+
+local function overflow(button, entry, count)
+    if count <= 0 then
+        if entry.overflow then entry.overflow:Hide() end
+        return
+    end
+    if not entry.overflow and type(button.CreateFontString) == "function" then
+        local ok, label = pcall(button.CreateFontString, button, nil, "OVERLAY", "GameFontNormalSmall")
+        if ok and label then
+            entry.overflow = label
+            if type(label.SetTextColor) == "function" then label:SetTextColor(1, 1, 1) end
+            if type(label.SetShadowOffset) == "function" then label:SetShadowOffset(1, -1) end
+            button.zvUpgradeOverflow = label
+        end
+    end
+    if entry.overflow then
+        if type(entry.overflow.ClearAllPoints) == "function" then entry.overflow:ClearAllPoints() end
+        entry.overflow:SetPoint("TOPRIGHT", entry.anchor or button, "TOPRIGHT", -1, -12)
+        entry.overflow:SetText("+" .. count)
+        entry.overflow:Show()
+    end
+end
+
+local function channel(value)
+    if type(value) ~= "number" or value ~= value then return 1 end
+    return math.max(0, math.min(1, value))
 end
 
 local function paint(button, entry)
     if not enabled(entry.option) or not visible(button) or
         (entry.owner and not visible(entry.owner)) then hide(entry); return end
     local ok, link = pcall(entry.provider, button)
-    if not ok or (issecretvalue and issecretvalue(link)) or type(link) ~= "string" or not link:find("item:", 1, true) or
-        type(FW.IsMainProfileUpgrade) ~= "function" or not FW:IsMainProfileUpgrade(link) then
+    if not ok or (issecretvalue and issecretvalue(link)) or type(link) ~= "string" or not link:find("item:", 1, true) then
         hide(entry); return
     end
-    if not entry.texture then
-        if type(button.CreateTexture) ~= "function" then return end
-        local success, texture = pcall(button.CreateTexture, button, nil, "OVERLAY", nil, 7)
-        if not success or not texture then return end
-        entry.texture = texture
-        texture:SetTexture(arrowTexture)
-        texture:SetSize(16, 16)
-        texture:SetPoint("TOPLEFT", entry.anchor or button, "TOPLEFT", 0, 0)
-        button.zvUpgradeArrow = texture
+    local profiles, legacy
+    if type(FW.GetItemUpgradeProfiles) == "function" then
+        ok, profiles = pcall(FW.GetItemUpgradeProfiles, FW, link)
+        if not ok or type(profiles) ~= "table" or #profiles == 0 then hide(entry); return end
+    else
+        -- Third-party adapters written for the original boolean API still
+        -- receive their usual green marker; production uses one profile list.
+        if type(FW.IsMainProfileUpgrade) ~= "function" then hide(entry); return end
+        ok, legacy = pcall(FW.IsMainProfileUpgrade, FW, link)
+        if not ok or not legacy then hide(entry); return end
+        profiles = {false}
     end
-    entry.texture:Show()
+    local count = math.min(#profiles, MAX_PROFILE_MARKERS)
+    for index = 1, count do
+        local texture = marker(button, entry, index)
+        if not texture then hide(entry); return end
+        local profile = profiles[index]
+        local color = type(profile) == "table" and profile.color or {}
+        texture:SetTexture(legacy and arrowTexture or profileArrowTexture)
+        if type(texture.SetVertexColor) == "function" then
+            texture:SetVertexColor(legacy and 1 or channel(color.r), legacy and 1 or channel(color.g),
+                legacy and 1 or channel(color.b), 1)
+        end
+        local size = count == 1 and 16 or 12
+        texture:SetSize(size, size)
+        if type(texture.ClearAllPoints) == "function" then texture:ClearAllPoints() end
+        texture:SetPoint("TOPLEFT", entry.anchor or button, "TOPLEFT", (index - 1) * 10, 0)
+        texture:Show()
+    end
+    for index = count + 1, #(entry.textures or {}) do entry.textures[index]:Hide() end
+    overflow(button, entry, #profiles - count)
 end
 
 local function hookMethod(target, method, callback)

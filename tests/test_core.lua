@@ -377,4 +377,88 @@ FW:ClearItemIssues()
 equal(FW:GetIssueReport().itemCount, 0)
 contains(assert(json.Encode(FW:GetIssueReport())), '"items":[]')
 
+-- Multiple upgrade profiles are separate from tooltip visibility and survive
+-- reloads without implicitly enabling a copy or a legacy/bare import.
+reset()
+local firstUpgrade = FW:GetProfiles()[1]
+local secondUpgrade = assert(FW:CreateProfile("Second upgrade", {}))
+equal(#FW:GetUpgradeProfiles(), 0)
+equal(firstUpgrade.upgradeEnabled, false)
+assert(FW:SetProfileUpgradeEnabled(firstUpgrade.id, true))
+assert(FW:SetProfileUpgradeEnabled(secondUpgrade.id, true))
+assert(FW:UpdateProfile(firstUpgrade.id, {active=false}))
+equal(#FW:GetUpgradeProfiles(), 2)
+equal(FW:GetUpgradeProfiles()[1], firstUpgrade, "enabled profiles keep profile order")
+equal(FW:GetUpgradeProfiles()[2], secondUpgrade)
+equal(FW:SetProfileUpgradeEnabled("missing", true), nil)
+equal(FW:SetProfileUpgradeEnabled(firstUpgrade.id, "true"), nil)
+local target = {mode="set", setID=0, name="Healing", character="Player-1-ABC"}
+local weightsRevision = firstUpgrade.revision
+assert(FW:UpdateProfile(firstUpgrade.id, {comparisonTarget=target}))
+equal(firstUpgrade.revision, weightsRevision, "baseline changes do not invalidate weighted item totals")
+target.name = "Changed outside"
+equal(firstUpgrade.comparisonTarget.name, "Healing", "targets own their validated metadata")
+local upgradeCopy = assert(FW:CopyProfile(firstUpgrade.id))
+equal(upgradeCopy.upgradeEnabled, false, "copying does not silently add a second upgrade marker")
+equal(upgradeCopy.comparisonTarget.setID, 0)
+upgradeCopy.comparisonTarget.name = "Copy set"
+equal(firstUpgrade.comparisonTarget.name, "Healing")
+local withTarget = assert(json.Decode(assert(FW:ExportProfile(firstUpgrade.id))))
+equal(withTarget.upgradeEnabled, true)
+equal(withTarget.comparisonTarget.character, "Player-1-ABC", "export retains equipment set character binding")
+local targetImport = assert(FW:ImportProfile(assert(json.Encode(withTarget))))
+equal(targetImport.upgradeEnabled, true, "explicit upgrade activation metadata is honored")
+equal(targetImport.comparisonTarget.setID, 0)
+withTarget.upgradeEnabled, withTarget.comparisonTarget = nil, nil
+local oldEnvelopeImport = assert(FW:ImportProfile(assert(json.Encode(withTarget))))
+equal(oldEnvelopeImport.upgradeEnabled, false, "old imports do not implicitly activate upgrade markers")
+equal(oldEnvelopeImport.comparisonTarget.mode, "equipped")
+local oldName = firstUpgrade.name
+for _, badTarget in ipairs({false, {}, {mode="unknown"}, {mode="set",setID=-1,character="Player-1"},
+    {mode="set",setID=1.5,character="Player-1"}, {mode="set",setID=1},
+    {mode="set",setID=1,character=""}, {mode="set",setID=1,character="Player-1",extra=true}}) do
+    equal(FW:UpdateProfile(firstUpgrade.id, {name="Must not change",comparisonTarget=badTarget}), nil)
+    equal(firstUpgrade.name, oldName, "invalid baseline changes remain atomic")
+end
+assert(FW:SetProfileUpgradeEnabled(firstUpgrade.id, false))
+FW.DB = nil
+FW:Initialize()
+equal(FW.DB.profiles[firstUpgrade.id].upgradeEnabled, false, "reload preserves explicit disabled profiles")
+equal(#FW:GetUpgradeProfiles(), 2, "reload retains independent upgrade activation")
+
+local optionProfile = FW.DB.profiles[firstUpgrade.id]
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={combatShare=0,castingShare=1}}))
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={whileCastingRegen=0.3}}))
+equal(optionProfile.calculationOptions.combatShare, 0, "partial calculation preference changes retain other ratios")
+equal(optionProfile.calculationOptions.castingShare, 1)
+equal(optionProfile.calculationOptions.whileCastingRegen, 0.3)
+local optionCopy = assert(FW:CopyProfile(optionProfile.id))
+optionCopy.calculationOptions.combatShare = 0.6
+equal(optionProfile.calculationOptions.combatShare, 0, "copies do not share calculator preferences")
+local optionImport = assert(FW:ImportProfile(assert(FW:ExportProfile(optionProfile.id))))
+equal(optionImport.calculationOptions.castingShare, 1, "calculator ratios round-trip with full profiles")
+for _, badOptions in ipairs({{combatShare=-0.1},{castingShare=1.1},{whileCastingRegen="30"},
+    {unknown=0.5}, json.null, {combatShare=math.huge}}) do
+    equal(FW:UpdateProfile(optionProfile.id, {name="Must not change",calculationOptions=badOptions}), nil)
+    equal(optionProfile.name, oldName, "invalid calculator preferences remain atomic")
+end
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions=false}))
+equal(optionProfile.calculationOptions, nil, "clearing preferences restores live calculator defaults")
+
+-- Only the former main profile is migrated, once, for existing installations.
+ZwykValuesDB = {profiles={old={name="Old main",weights={}},other={name="Other",weights={}}},
+    profileOrder={"old","other"}, options={mainProfileID="old"}}
+FW.DB = nil
+FW:Initialize()
+equal(#FW:GetUpgradeProfiles(), 1)
+equal(FW:GetUpgradeProfiles()[1].id, "old")
+assert(FW:SetProfileUpgradeEnabled("old", false))
+FW.DB = nil
+FW:Initialize()
+equal(#FW:GetUpgradeProfiles(), 0, "old main selection is never re-applied after migration")
+assert(FW:SetProfileUpgradeEnabled("other", true))
+assert(FW:SetMainProfile("old"))
+equal(#FW:GetUpgradeProfiles(), 1, "legacy single-selection callers retain their existing behavior")
+equal(FW:GetUpgradeProfiles()[1].id, "old")
+
 print("Core/JSON: " .. passed .. " checks passed.")

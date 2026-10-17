@@ -1,6 +1,7 @@
 local _, FW = ...
 
 local arrow = "|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowUp:12:12:0:0|t"
+local profileArrow = "|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowUpWhite:12:12:0:0:16:16:0:16:0:16:%d:%d:%d|t"
 local memo, memoCount, memoSignature = {}, 0, nil
 local function remember(key, value)
     if memoCount >= (FW.CACHE_LIMIT or 2000) then memo, memoCount = {}, 0 end
@@ -21,19 +22,25 @@ function FW:InvalidateUpgradeComparisons()
     memo, memoCount, memoSignature = {}, 0, nil
 end
 
-function FW:IsMainProfileUpgrade(link)
-    link = safeString(link)
-    if not link or not link:find("item:", 1, true) then return false end
-    local profile = self:GetMainProfile()
-    if not profile then return false end
-    local signature = table.concat({profile.id, profile.revision or 0,
-        self.equipmentRevision or 0}, ":")
+local function upgradeProfiles(self)
+    if self.GetUpgradeProfiles then return self:GetUpgradeProfiles() end
+    local profile = self.GetMainProfile and self:GetMainProfile()
+    return profile and {profile} or {}
+end
+
+local function isProfileUpgrade(self, link, itemKey, profile)
+    local signature = tostring(self.equipmentRevision or 0)
     if signature ~= memoSignature then
         self:InvalidateUpgradeComparisons()
         memoSignature = signature
     end
-    local key = self.ItemKey and self:ItemKey(link) or link
-    if not key then return false end
+    local target = profile.comparisonTarget or {}
+    local baseline = table.concat({target.mode or "equipped", target.character or "", target.setID or ""}, ":")
+    if self.GetUpgradeBaselineSignature then
+        local ok, value = pcall(self.GetUpgradeBaselineSignature, self, profile)
+        if ok and safeString(value) then baseline = value end
+    end
+    local key = table.concat({profile.id, profile.revision or 0, baseline, itemKey}, "\31")
     local cached = memo[key]
     if type(cached) == "boolean" then return cached end
     if cached and GetTime and cached.expires > GetTime() then return cached.value end
@@ -57,16 +64,50 @@ function FW:IsMainProfileUpgrade(link)
     return upgrade
 end
 
+function FW:GetItemUpgradeProfiles(link)
+    link = safeString(link)
+    if not link or not link:find("item:", 1, true) then return {} end
+    local profiles = upgradeProfiles(self)
+    if #profiles == 0 then return {} end
+    local key = self.ItemKey and self:ItemKey(link) or link
+    if not key then return {} end
+    local upgrades = {}
+    for _, profile in ipairs(profiles) do
+        if isProfileUpgrade(self, link, key, profile) then upgrades[#upgrades + 1] = profile end
+    end
+    return upgrades
+end
+
+function FW:IsMainProfileUpgrade(link)
+    return #self:GetItemUpgradeProfiles(link) > 0
+end
+
+local function profileMarker(profile)
+    local color = profile.color or {r=0.35, g=0.8, b=1}
+    local function byte(value)
+        if type(value) ~= "number" or value ~= value then return 255 end
+        return math.floor(math.min(1, math.max(0, value)) * 255 + 0.5)
+    end
+    local marker = profileArrow:format(byte(color.r), byte(color.g), byte(color.b))
+    if profile.icon then marker = "|T" .. profile.icon .. ":12:12:0:0|t" .. marker end
+    return marker
+end
+
 function FW:DecorateUpgradeChatMessage(message)
     message = safeString(message)
-    if not message or not self.DB or not self.DB.options.upgradeChat or not self:GetMainProfile() then
+    if not message or not self.DB or not self.DB.options.upgradeChat or #upgradeProfiles(self) == 0 then
         return message
     end
     -- Keep the original hyperlink (including enchant/suffix fields) and all
     -- surrounding color codes intact. The icon is outside the clickable text.
     return (message:gsub("()(|Hitem:[^|]+|h.-|h)()", function(_, link, after)
         if message:sub(after, after + #arrow) == " " .. arrow then return link end
-        if self:IsMainProfileUpgrade(link) then return link .. " " .. arrow end
+        local profiles = self:GetItemUpgradeProfiles(link)
+        if #profiles == 0 then return link end
+        local markers = {}
+        for _, profile in ipairs(profiles) do markers[#markers + 1] = profileMarker(profile) end
+        local suffix = " " .. table.concat(markers, " ")
+        if message:sub(after, after + #suffix - 1) ~= suffix then return link .. suffix end
         return link
     end))
 end

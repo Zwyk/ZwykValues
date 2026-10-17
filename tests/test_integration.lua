@@ -124,7 +124,7 @@ CreateFrame=function(kind,name)
     assert(kind=="GameTooltip" and name=="ZwykValuesScanTooltip")
     local scanner=frame(name);_G[name]=scanner;return scanner
 end
-for _,file in ipairs({"JSON.lua","Stats.lua","Core.lua","Items.lua","Compare.lua","Upgrades.lua","Tooltips.lua"}) do
+for _,file in ipairs({"JSON.lua","Stats.lua","Core.lua","DerivedWeights.lua","Items.lua","EquipmentSets.lua","Compare.lua","Upgrades.lua","Tooltips.lua"}) do
     assert(loadfile(file))("ZwykValues",FW)
 end
 local actualScoreStats=FW.ScoreStats
@@ -361,6 +361,42 @@ baseline=oldBaseline
 for _,profile in ipairs({one,two,ammoProfile}) do assert(FW:UpdateProfile(profile.id,{active=true})) end
 assert(FW:UpdateProfile(averageProfile.id,{active=false}))
 assert(FW:SetMainProfile(ammoProfile.id))
+
+-- Real profile/filter/scoring modules use independent full-variant set baselines.
+-- Two profiles can disagree on the same item and keep their own memoized result.
+UnitGUID=function() return "Player-Integration" end
+local savedSetLink=variant
+C_EquipmentSet={
+    GetEquipmentSetIDs=function() return {7} end,
+    GetEquipmentSetInfo=function() return "Caster set",123,7 end,
+    GetItemLocations=function() return {[1]=101} end,
+    GetItemIDs=function() return {[1]=100} end,
+    GetIgnoredSlots=function() return {} end,
+}
+EquipmentManager_GetLocationData=function() return {isPlayer=true,isBags=true,bag=0,slot=1} end
+GetContainerItemLink=function() return savedSetLink end
+FW:InvalidateEquipmentSetBaselines()
+for _,profile in ipairs(FW:GetProfiles()) do assert(FW:SetProfileUpgradeEnabled(profile.id,false)) end
+assert(FW:UpdateProfile(one.id,{comparisonTarget={mode="equipped"},upgradeEnabled=true}))
+assert(FW:UpdateProfile(two.id,{weights={strength=-1,crit=0},upgradeEnabled=true,
+    comparisonTarget={mode="set",setID=7,name="Caster set",character="Player-Integration"}}))
+local full=assert(FW:CompareItem(candidate,two))
+assert(full.comparisons[1].baseline==-15 and full.comparisons[1].status=="upgrade",
+    "Saved set resolution retains the random-suffix stat variant")
+assert(FW:CompareBaseItem(candidate,two).comparisons[1].baseline==-15)
+assert(FW:CompareAverageUseItem(candidate,two).comparisons[1].baseline==-15)
+local matching=FW:GetItemUpgradeProfiles(candidate)
+assert(#matching==2 and matching[1]==one and matching[2]==two)
+local fixedReads,fixedScans=reads,scans
+for _=1,100 do assert(#FW:GetItemUpgradeProfiles(candidate)==2) end
+assert(reads==fixedReads and scans==fixedScans,"Multiple profiles reuse completed item reads and decisions")
+savedSetLink=candidate
+FW:InvalidateEquipmentSetBaselines()
+matching=FW:GetItemUpgradeProfiles(candidate)
+assert(#matching==1 and matching[1]==one,"Set location revisions invalidate only that profile's comparison target")
+assert(FW:UpdateProfile(two.id,{comparisonTarget={mode="set",setID=7,name="Caster set",character="Other-player"}}))
+assert(FW:CompareItem(candidate,two).pending and #FW:GetItemUpgradeProfiles(candidate)==1,
+    "A set from another character never becomes an empty/equipped baseline")
 
 -- SavedVariables reused by a fresh addon namespace keep valid item totals.
 local persisted=ZwykValuesDB
