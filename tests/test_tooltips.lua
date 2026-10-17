@@ -291,7 +291,7 @@ postCall(partial,{hyperlink="item:720"})
 assert(#partial.lines==4 and partial.lines[2].right:find("100.00",1,true))
 assert(partial.lines[4].text=="Partial stat data; /zv inspect or /zv exportissues.")
 postCall(partial,{hyperlink="item:720"}); assert(#partial.lines==4)
-record.partial=false; record.scoreIssues={one={missingStats={crit=true}}}
+record.partial=false; record.scoreIssues={one={missingStats={meleeCrit=true}}}
 local units=tooltip("UnitsTooltip","item:721")
 postCall(units,{hyperlink="item:721"})
 assert(#units.lines==4 and units.lines[2].right:find("100.00",1,true))

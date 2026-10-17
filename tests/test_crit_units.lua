@@ -81,8 +81,9 @@ local profile, importError, warnings = FW:ImportProfile(assert(FW.JSON.Encode({
 })))
 assert(profile, importError)
 equal(profile.secondaryUnit, "percent", "legacy rating imports use percentages")
-equal(profile.weights.crit, 10, "legacy import preserves numeric weights")
-equal(#warnings, 1, "legacy rating import explains its normalization")
+equal(profile.weights.crit, nil, "legacy imports do not retain a hidden combined crit weight")
+equal(profile.weights.meleeCrit, 5); equal(profile.weights.spellCrit, 5)
+equal(#warnings, 2, "legacy imports explain percentage scoring and the combined-crit split")
 local oldRevision = profile.revision
 assert(FW:UpdateProfile(profile.id, {secondaryUnit = "rating"}))
 equal(profile.secondaryUnit, "percent", "legacy rating update cannot select rating scoring")
@@ -91,10 +92,13 @@ assert(FW:SetMainProfile(profile.id))
 local score, item, detail = FW:GetScore(candidate, profile)
 equal(detail, nil)
 equal(item.partial, false)
-equal(item.ratingStats.crit, 7, "generic, scoped and unsuffixed aliases count once")
-equal(item.percentStats.crit, 0.5, "tooltip percentage stays separate from native rating")
+equal(item.ratingStats.meleeCrit, 7, "generic, scoped and unsuffixed attack aliases count once")
+equal(item.ratingStats.spellCrit, 7, "generic, scoped and unsuffixed spell aliases count once")
+equal(item.percentStats.meleeCrit, 0.5, "generic tooltip crit supplies attack percentage points")
+equal(item.percentStats.spellCrit, 0.5, "generic tooltip crit supplies spell percentage points")
 equal(item.percentStats.hit, nil, "critical strike does not supply hit chance")
 equal(item.stats.crit, nil)
+equal(item.ratingStats.crit, nil); equal(item.percentStats.crit, nil)
 approx(score, 16.35, "11.35 static + 0.5 percentage point times 10")
 approx(FW:GetScore(candidate, profile), 16.35)
 equal(reads, 1); equal(scans, 1); equal(scoreCalls, 1, "repeated score is cached")
@@ -118,7 +122,7 @@ FW:Initialize()
 profile = FW.DB.profiles[profile.id]
 equal(profile.secondaryUnit, "percent", "SavedVariables migration normalizes rating profiles")
 equal(profile.revision, oldRevision + 1)
-equal(profile.weights.crit, 10, "migration never rewrites numeric weights")
+equal(profile.weights.meleeCrit, 5); equal(profile.weights.spellCrit, 5)
 approx(FW:GetScore(candidate, profile), 16.35, "migration invalidates the inflated rating score")
 comparison = assert(FW:CompareItem(candidate, profile))
 approx(comparison.comparisons[1].baseline, 20)
@@ -142,12 +146,39 @@ for key in pairs(fixtures[candidate].raw) do
 end
 assert(FW:InvalidateItem(candidate))
 score, item, detail = FW:GetScore(candidate, profile)
-equal(item.ratingStats.crit, 999, "raw rating remains available for diagnostics")
-equal(item.percentStats.crit, 0.5)
+equal(item.ratingStats.meleeCrit, 999, "raw attack rating remains available for diagnostics")
+equal(item.ratingStats.spellCrit, 999, "raw spell rating remains available for diagnostics")
+equal(item.percentStats.meleeCrit, 0.5); equal(item.percentStats.spellCrit, 0.5)
 equal(detail, nil)
 approx(score, 16.35, "raw rating changes never alter percentage scoring")
 equal(FW:IsMainProfileUpgrade(candidate), false)
 equal(reads, 3); equal(scans, 3); equal(scoreCalls, 5)
 local exported = assert(FW.JSON.Decode(assert(FW:ExportProfile(profile.id))))
 equal(exported.secondaryUnit, "percent", "exports cannot reintroduce rating mode")
+equal(exported.weights.crit, nil)
+equal(exported.weights.meleeCrit, 5); equal(exported.weights.spellCrit, 5)
+
+-- Distinct priorities are scored from actual parsed percentages. Native
+-- ratings remain diagnostic even when attack/spell amounts differ.
+local split = assert(FW:CreateProfile("Different crit priorities", {meleeCrit=3,spellCrit=10}))
+approx(FW:GetScore(candidate, split), 6.5, "generic half-percent crit receives both canonical weights")
+local scoped = "item:200003"
+fixtures[scoped] = {name="Scoped critical strike boots",raw={
+    ITEM_MOD_CRIT_MELEE_RATING_SHORT=777,ITEM_MOD_CRIT_SPELL_RATING_SHORT=999},lines={
+    "Equip: Increases your chance to get a critical strike with melee attacks by 1%.",
+    "Equip: Increases your chance to get a critical strike with spells by 2%."}}
+local scopedScore, scopedItem = FW:GetScore(scoped, split)
+equal(scopedItem.partial, false)
+equal(scopedItem.percentStats.meleeCrit, 1); equal(scopedItem.percentStats.spellCrit, 2)
+approx(scopedScore, 23, "attack and spell percentages use independent priorities")
+assert(FW:UpdateProfile(split.id, {weights={meleeCrit=0}}))
+approx(FW:GetScore(scoped, split), 20, "editing attack crit cannot replace the spell-crit priority")
+local attackOnly, spellOnly = "item:200004", "item:200005"
+fixtures[attackOnly] = {name="Attack crit boots",raw={ITEM_MOD_CRIT_MELEE_RATING_SHORT=777},
+    lines={"Equip: Increases your chance to get a critical strike with ranged attacks by 1%."}}
+fixtures[spellOnly] = {name="Spell crit boots",raw={ITEM_MOD_CRIT_SPELL_RATING_SHORT=999},
+    lines={"Equip: Increases your chance to get a critical strike with spells by 2%."}}
+assert(FW:UpdateProfile(split.id, {weights={meleeCrit=3}}))
+approx(FW:GetScore(attackOnly, split), 3, "ranged crit belongs to the attack channel")
+approx(FW:GetScore(spellOnly, split), 20, "spell-only crit never gains the attack priority")
 print("Crit unit tests passed (" .. checks .. " checks)")

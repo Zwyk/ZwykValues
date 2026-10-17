@@ -44,7 +44,7 @@ local function read(use,locale,extra)
     return assert(FW:GetItem('item:900:0')),FW
 end
 local item,FW=read('Use: Increases spell power by 120 for 10 sec. (2 Min Cooldown)')
-equal(item.parserVersion,10)
+equal(item.parserVersion,11)
 equal(item.stats.strength,4);equal(item.stats.spellDamage,nil);equal(item.stats.healing,nil)
 near(item.onUseStats.spellDamage,10);near(item.onUseStats.healing,10)
 equal(item.partial,false);equal(#item.warnings,0);equal(#item.unrecognizedLines,0)
@@ -81,8 +81,8 @@ equal(item.stats.armor,150);equal(item.stats.armorBonus,nil)
 equal(item.onUseStats.armor,nil);near(item.onUseStats.armorBonus,200/6)
 equal(item.onUseEffects[1].stats.armor,nil);equal(item.onUseEffects[1].stats.armorBonus,200)
 for _,case in ipairs({
-    {'Use: Increases your critical strike rating by 60 for 10 sec. (1 Min Cooldown)','crit',10,'rating'},
-    {'Use: Increases your critical strike chance by 2% for 30 sec. (2 Min Cooldown)','crit',0.5,'percent'},
+    {'Use: Increases your critical strike rating by 60 for 10 sec. (1 Min Cooldown)','meleeCrit',10,'rating'},
+    {'Use: Increases your critical strike chance by 2% for 30 sec. (2 Min Cooldown)','spellCrit',0.5,'percent'},
     {'Use: Increases your chance to hit by 2% for 30 sec. (2 Min Cooldown)','hit',0.5,'percent'},
     {'Use: Increases defense skill by 10 for 30 sec. (1 Min Cooldown)','defense',5,'percent'},
     {'Utiliser : Augmente votre score de hâte de 60 pendant 10 s. (1 min de recharge.)','haste',10,'rating','frFR'},
@@ -95,6 +95,49 @@ for _,case in ipairs({
     near(values[case[2]],case[3]);equal(#item.onUseUnsupported,0)
     equal(next(item.ratingStats),nil);equal(next(item.percentStats),nil);equal(item.partial,false)
 end
+-- On-use buffs retain both critical channels and independent effect rows.
+for index,case in ipairs({
+    {'Use: Increases your critical strike chance by 2% for 30 sec. (2 Min Cooldown)',.5,.5},
+    {'Use: Improves your chance to get a critical strike with spells by 2% for 30 sec. (2 Min Cooldown)',nil,.5},
+    {'Use: Improves your chance to get a critical strike with attacks by 2% for 30 sec. (2 Min Cooldown)',.5,nil},
+    {'Use: Increases your ranged critical strike chance by 2% for 30 sec. (2 Min Cooldown)',.5,nil},
+    {'Utiliser : Augmente vos chances d\'infliger un coup critique avec les sorts de 1,5% pendant 10 s. (1 min de recharge.)',nil,.25,'frFR'},
+    {'Utiliser : Augmente votre score de coup critique des sorts de 60 pendant 10 s. (1 min de recharge.)',nil,10,'frFR','rating'},
+    {'Use: Increases your melee critical strike rating by 60 for 10 sec. (1 Min Cooldown)',10,nil,'enUS','rating'},
+    {'Use: Increases your critical strike rating by 60 for 10 sec. (1 Min Cooldown)',10,10,'enUS','rating'},
+}) do
+    item=read(case[1],case[4])
+    local values=case[5]=='rating' and item.onUseRatingStats or item.onUsePercentStats
+    if case[2] then near(values.meleeCrit,case[2]) else equal(values.meleeCrit,nil) end
+    if case[3] then near(values.spellCrit,case[3]) else equal(values.spellCrit,nil) end
+    equal(values.crit,nil);equal(#item.onUseUnsupported,0);equal(next(item.percentStats),nil)
+end
+FW=reader({'Test Trinket','+4 Strength',
+    'Use: Increases your critical strike chance by 2% for 30 sec. (2 Min Cooldown)',
+    'Use: Increases your spell critical strike chance by 2% for 30 sec. (2 Min Cooldown)'})
+item=assert(FW:GetItem('item:910'))
+near(item.onUsePercentStats.meleeCrit,.5);near(item.onUsePercentStats.spellCrit,1)
+equal(#item.onUseEffects,2,'same-value generic and scoped on-use rows remain independent')
+FW=reader({'Test Trinket','+4 Strength',
+    'Use: Increases your melee critical strike chance by 2% for 30 sec. (2 Min Cooldown)',
+    'Use: Increases your ranged critical strike chance by 2% for 30 sec. (2 Min Cooldown)'})
+item=assert(FW:GetItem('item:911'))
+near(item.onUsePercentStats.meleeCrit,.5,'matching melee/ranged buffs are not doubled')
+equal(item.onUsePercentStats.spellCrit,nil)
+FW=reader({'Test Trinket','+4 Strength',
+    'Use: Increases your critical strike chance by 2% for 30 sec. (2 Min Cooldown)',
+    'Use: Increases your physical critical strike chance by 2% for 30 sec. (2 Min Cooldown)',
+    'Use: Increases your melee critical strike chance by 2% for 30 sec. (2 Min Cooldown)',
+    'Use: Increases your ranged critical strike chance by 4% for 30 sec. (2 Min Cooldown)'})
+item=assert(FW:GetItem('item:912'))
+near(item.onUsePercentStats.meleeCrit,2,'generic plus all-attacks plus largest scoped average')
+near(item.onUsePercentStats.spellCrit,.5)
+FW=reader({'Test Trinket','+4 Strength',
+    'Use: Increases your melee critical strike rating by 60 for 10 sec. (1 Min Cooldown)',
+    'Use: Increases your ranged critical strike rating by 60 for 10 sec. (1 Min Cooldown)'})
+item=assert(FW:GetItem('item:913'))
+near(item.onUseRatingStats.meleeCrit,10,'on-use rating diagnostics preserve attack scopes too')
+equal(item.onUseRatingStats.spellCrit,nil)
 -- Cooldown association is native-row adjacent, not adjacent after blank removal.
 item,FW=read('Use: Increases Strength by 60 for 10 sec.','enUS','(1 Min Cooldown)')
 near(item.onUseStats.strength,10)
@@ -121,6 +164,7 @@ for _,use in ipairs({
     'Use: Increases Strength by 60 and grants 3 Mystery Flux for 10 sec. (2 Min Cooldown)',
     'Use: Grants 60 Mystery Flux for 10 sec. (2 Min Cooldown)',
     'Use: Increases critical strike rating by 2% for 10 sec. (2 Min Cooldown)',
+    'Use: Increases your critical strike damage by 20% for 10 sec. (2 Min Cooldown)',
     'Use: Increases Strength by 60 for 10 sec. (0 Min Cooldown)',
     'Use: Increases Strength by 60 for 0 sec. (2 Min Cooldown)',
     'Use: Increases Strength by 60 for 10 sec. (2 Fortnights Cooldown)',

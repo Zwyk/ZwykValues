@@ -1,6 +1,6 @@
 local _, FW = ...
 
--- Keep these keys compatible with the flat Sixty Upgrades weight JSON.
+-- Explicit stat keys; legacy combined crit is normalized when weights are imported.
 -- Secondary weights always mean one percentage point (defense uses one skill
 -- point). Native ratings remain diagnostic data, never a scoring fallback.
 FW.StatDefinitions = {
@@ -30,7 +30,8 @@ FW.StatDefinitions = {
     { key = "weaponDamage", label = "Flat added weapon damage", group = "Weapon" },
     { key = "speed", label = "Melee weapon speed", group = "Weapon" },
     { key = "hit", label = "Hit", group = "Secondary", secondary = true },
-    { key = "crit", label = "Critical strike", group = "Secondary", secondary = true },
+    { key = "meleeCrit", label = "Melee critical strike", group = "Secondary", secondary = true },
+    { key = "spellCrit", label = "Spell critical strike", group = "Secondary", secondary = true },
     { key = "haste", label = "Haste", group = "Secondary", secondary = true },
     { key = "expertise", label = "Expertise", group = "Secondary", secondary = true },
     { key = "rangedDps", label = "Ranged weapon DPS", group = "Weapon" },

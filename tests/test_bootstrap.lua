@@ -49,7 +49,7 @@ end
 function FW:GetHoveredItemLink() return hovered end
 function FW:ToggleUI() counts.ui=counts.ui+1 end
 function FW:GetItem(link)
-    return {stats={strength=10},percentStats={crit=1},ratingStats={},warnings={},unresolvedStats={}}
+    return {stats={strength=10},percentStats={meleeCrit=1,spellCrit=1},ratingStats={},warnings={},unresolvedStats={}}
 end
 function FW:GetIssueReport() return {itemCount=1,items={{itemID=777}}} end
 function FW:ClearItemIssues() counts.clearIssues=(counts.clearIssues or 0)+1 end
@@ -161,6 +161,8 @@ SlashCmdList.ZWYKVALUES("help")
 assert(messages[#messages]:find("/zv opens profiles",1,true))
 SlashCmdList.ZWYKVALUES("inspect item:777")
 assert(counts.dialog==1 and FW.lastEncoded.item=="item:777" and FW.lastEncoded.locale=="enUS")
+assert(FW.lastEncoded.percentStats.meleeCrit==1 and FW.lastEncoded.percentStats.spellCrit==1
+    and FW.lastEncoded.percentStats.crit==nil, "Inspection diagnostics expose both canonical Crit channels")
 SlashCmdList.ZWYKVALUES("inspect")
 assert(messages[#messages]:find("Hover an item",1,true))
 SlashCmdList.ZWYKVALUES("exportissues")

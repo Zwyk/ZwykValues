@@ -61,7 +61,7 @@ local item = assert(FW:GetItem("item:100:0:0:0:0:0:7:99"))
 equal(item.stats.strength, 20)
 equal(item.ratingStats.hit, 14, "merged hit counted once")
 equal(item.percentStats.hit, 1, "merged percentage counted once")
-equal(item.percentStats.crit, 0.5)
+equal(item.percentStats.meleeCrit, 0.5); equal(item.percentStats.spellCrit, 0.5)
 equal(item.partial, false)
 equal(item.unresolvedStats.hit, nil)
 local cachedItem = FW:GetItem("item:100:0:0:0:0:0:7:99")
@@ -124,7 +124,7 @@ locale = "frFR"
 item = assert(FW:GetItem("item:105"))
 equal(item.stats.intellect, 10); equal(item.stats.spellDamage, 30); equal(item.stats.healing, 30)
 equal(item.stats.mp5, 6); equal(item.percentStats.defense, 5)
-approx(item.percentStats.crit, 1.5); equal(item.partial, false)
+approx(item.percentStats.meleeCrit, 1.5); approx(item.percentStats.spellCrit, 1.5); equal(item.partial, false)
 
 FW = newReader({ raw = { ITEM_MOD_HASTE_RATING_SHORT = 12 }, lines = {
     "Test Item", "Equip: Increases your haste rating by 12.",
@@ -142,7 +142,7 @@ FW = newReader({ raw = {}, lines = { "Test Item", "+8 Strength",
 } })
 item = assert(FW:GetItem("item:107"))
 equal(item.stats.strength, 8); equal(item.stats.attackPower, nil)
-equal(item.percentStats.crit, nil); equal(item.percentStats.hit, nil)
+equal(item.percentStats.meleeCrit, nil); equal(item.percentStats.spellCrit, nil); equal(item.percentStats.hit, nil)
 equal(#item.unrecognizedLines, 0, "procs and conditional effects don't become debug stat warnings")
 
 FW = newReader({ raw = { ITEM_MOD_STRENGTH_SHORT = 5 }, lines = {
@@ -201,17 +201,19 @@ FW = newReader({ raw = { ITEM_MOD_CRIT_RATING_SHORT = 14 }, lines = {
     "Test Item", "Critical Strike +1%", "Equip: Increases your chance to critically hit with spells by 1%.",
 } })
 item = assert(FW:GetItem("item:112"))
-equal(item.percentStats.crit, 1, "generic and legacy percentage aliases counted once")
+equal(item.percentStats.meleeCrit, 1, "generic crit contributes to attack chance")
+equal(item.percentStats.spellCrit, 2, "distinct generic and spell effect rows add, even at the same amount")
 equal(item.percentStats.hit, nil, "critically hit is not ordinary hit chance")
 
 FW = newReader({ raw = {}, lines = {
     "Test Item", "Equip: Increases your chance to critically hit with spells by 0.5%.",
 } })
 item = assert(FW:GetItem("item:1121"))
-equal(item.percentStats.crit, 0.5, "a standalone critically hit line supplies crit")
+equal(item.percentStats.spellCrit, 0.5, "a standalone critically hit with spells line supplies spell crit")
+equal(item.percentStats.meleeCrit, nil, "spell-only chance cannot supply melee crit")
 equal(item.percentStats.hit, nil)
 equal(item.partial, false)
-local criticalProfile = assert(FW:CreateProfile("Crit wording", {crit=10,hit=100}))
+local criticalProfile = assert(FW:CreateProfile("Crit wording", {spellCrit=10,meleeCrit=50,hit=100}))
 equal(FW:GetScore("item:1121",criticalProfile), 5, "crit wording cannot acquire an extra hit contribution")
 
 FW = newReader({ raw = { ITEM_MOD_SPELL_DAMAGE_DONE = 20, ITEM_MOD_POWER_REGEN0_SHORT = 4 }, lines = {
@@ -240,7 +242,8 @@ FW = newReader({ raw = {}, lines = { "Test Item", "1\194\160234 Armure", "Critiq
 locale = "frFR"
 item = assert(FW:GetItem("item:117"))
 equal(item.stats.armor, 1234, "French thousands separators")
-equal(item.percentStats.crit, 1.5, "French decimal separators")
+equal(item.percentStats.meleeCrit, 1.5, "French decimal separators")
+equal(item.percentStats.spellCrit, 1.5)
 
 FW = newReader({ raw = {}, lines = { "Test Item", "Equip: Reduces the chance for your attacks to be dodged or parried by 1%." } })
 item = assert(FW:GetItem("item:118"))
@@ -344,7 +347,7 @@ for _, sample in ipairs(foreverCases) do
     equal(next(item.unresolvedStats), nil)
     equal(FW:GetIssueReport().itemCount, 0)
     equal(FW:GetItem("item:" .. sample.id .. ":8481"), item, "resolved item caches")
-    equal(item.parserVersion, 10, "old persisted parser results receive a new key")
+    equal(item.parserVersion, 11, "old persisted parser results receive a new key")
 end
 
 FW = newReader({ raw = { RESISTANCE0_NAME = 141, ITEM_MOD_STAMINA_SHORT = 4 },
@@ -422,7 +425,7 @@ equal(FW.DB.cache.items[item.key],nil,"missing ammo DPS is never cached as a com
 
 FW = newReader({raw={},classID=6,subclassID=2,equipLoc="INVTYPE_AMMO",lines={"Arrow","Adds 7.5 damage per second"}})
 local ammoProfile = assert(FW:CreateProfile("Cache migration",{rangedDps=2,dps=100}))
-local oldAmmoKey = FW:ItemKey("item:511"):gsub("^10|","4|")
+local oldAmmoKey = FW:ItemKey("item:511"):gsub("^11|","4|")
 FW.DB.cache.items[oldAmmoKey] = {key=oldAmmoKey,stats={dps=7.5},equipLoc="INVTYPE_AMMO"}
 FW.DB.cache.scores[oldAmmoKey] = {[ammoProfile.id]={revision=ammoProfile.revision,score=750}}
 equal(FW:GetScore("item:511",ammoProfile),15,"parser update ignores ammo previously cached as melee DPS")
@@ -578,10 +581,173 @@ assert(manaRecord.scoreIssues[manaProfile.id].missingStats.mana)
 
 FW = newReader({raw={ITEM_MOD_MANA_SHORT=60},lines={"Mana ring","+60 Mana"}})
 manaProfile = assert(FW:CreateProfile("Mana cache migration",{mana=1}))
-local oldManaKey = FW:ItemKey("item:824"):gsub("^10|","9|")
+local oldManaKey = FW:ItemKey("item:824"):gsub("^11|","9|")
 FW.DB.cache.items[oldManaKey] = {key=oldManaKey,stats={},equipLoc="INVTYPE_HEAD",classID=4,subclassID=4}
 FW.DB.cache.scores[oldManaKey] = {[manaProfile.id]={revision=manaProfile.revision,score=0}}
 equal(FW:GetScore("item:824",manaProfile),60,"old complete records that ignored Mana are reparsed")
 equal(modernCalls,1)
+
+-- Critical chance has two independent percentage channels. A generic effect
+-- contributes once to each; scoped tooltip rows remain separate effects.
+for index,sample in ipairs({
+    {"Critical Strike +1%",1,1},
+    {"Spell Critical Strike +2%",nil,2},
+    {"Melee Critical Strike +3%",3,nil},
+    {"Ranged Critical Strike +4%",4,nil},
+    {"Physical Critical Strike Chance +5%",5,nil},
+    {"Equip: Improves your chance to get a critical strike with spells by 1%.",nil,1},
+    {"Equip: Improves your chance to get a critical strike with attacks by 2%.",2,nil},
+    {"Equip: Increases your chance to critically hit with ranged attacks by 3%.",3,nil},
+    {"Equip: Increases the critical strike chance of your spells by 4%.",nil,4},
+    {"Equip: Increases your chance to get a critical strike with melee and ranged attacks by 2%.",2,nil},
+    {"Equip: Increases your chance to critically hit with attacks and spells by 3%.",3,3},
+    {"Critique +1,5%",1.5,1.5,"frFR"},
+    {"Coup critique des sorts +2,5%",nil,2.5,"frFR"},
+    {"Chances de coup critique en mêlée +3,5%",3.5,nil,"frFR"},
+    {"Équipé : Augmente vos chances d'infliger un coup critique avec les sorts de 1,5%.",nil,1.5,"frFR"},
+    {"Équipé : Augmente vos chances d’infliger un coup critique avec vos attaques de 2,5%.",2.5,nil,"frFR"},
+    {"Équipé : Augmente les chances de coup critique de vos sorts de 4,5%.",nil,4.5,"frFR"},
+}) do
+    FW = newReader({raw={},lines={"Critical ring",sample[1]}})
+    locale = sample[4] or "enUS"
+    item = assert(FW:GetItem("item:" .. (900+index)))
+    equal(item.percentStats.meleeCrit,sample[2],sample[1] .. " melee channel")
+    equal(item.percentStats.spellCrit,sample[3],sample[1] .. " spell channel")
+    equal(item.percentStats.crit,nil,"the merged parser key is retired")
+    equal(item.percentStats.hit,nil,"critical hits are never ordinary Hit")
+    equal(item.partial,false,sample[1] .. " complete extraction")
+    equal(next(item.unresolvedStats),nil)
+end
+
+FW = newReader({raw={ITEM_MOD_CRIT_RATING_SHORT=14,ITEM_MOD_CRIT_RATING=14,
+    ITEM_MOD_CRIT_MELEE_RATING_SHORT=14,ITEM_MOD_CRIT_RANGED_RATING_SHORT=14,
+    ITEM_MOD_CRIT_SPELL_RATING_SHORT=20,ITEM_MOD_SPELL_CRIT_RATING=20},lines={"Critical ring",
+    "Critical Strike +1%","Equip: Increases your spell critical strike chance by 1%.",
+    "Equip: Increases your melee critical strike chance by 2%."}})
+item = assert(FW:GetItem("item:930"))
+equal(item.ratingStats.meleeCrit,14,"API melee/ranged/generic rating aliases do not add")
+equal(item.ratingStats.spellCrit,20,"API spell rating remains separate and aliases do not add")
+equal(item.percentStats.meleeCrit,3); equal(item.percentStats.spellCrit,2)
+equal(item.unresolvedStats.meleeCrit,nil); equal(item.unresolvedStats.spellCrit,nil)
+local splitProfile = assert(FW:CreateProfile("Asymmetric crit",{meleeCrit=2,spellCrit=7,hit=100}))
+equal(FW:GetScore(item.link,splitProfile),20,"native rating never duplicates readable percentage chance")
+equal(next(item.diagnostic.unknownKeys),nil)
+
+for index,sample in ipairs({
+    {{ITEM_MOD_CRIT_SPELL_SHORT=2},nil,true},
+    {{ITEM_MOD_CRIT_MELEE_SHORT=2},true,nil},
+    {{ITEM_MOD_CRIT_RANGED_SHORT=2},true,nil},
+    {{ITEM_MOD_CRIT_SHORT=2},true,true},
+    {{ITEM_MOD_CRIT_SPELL_RATING_SHORT="unavailable"},nil,true},
+}) do
+    FW = newReader({raw=sample[1],lines={"Unread critical ring","+1 Strength"}})
+    item = assert(FW:GetItem("item:" .. (940+index)))
+    equal(item.unresolvedStats.meleeCrit,sample[2],"scoped API unresolved melee")
+    equal(item.unresolvedStats.spellCrit,sample[3],"scoped API unresolved spell")
+    equal(item.unresolvedStats.crit,nil)
+end
+
+for index,sample in ipairs({
+    {"Equip: Increases your spell critical strike rating by 20.",nil,20},
+    {"Equip: Increases your melee critical strike rating by 10.",10,nil},
+    {"Equip: Increases your critical strike rating by 30.",30,30},
+    {"Équipé : Augmente votre score de coup critique des sorts de 25.",nil,25,"frFR"},
+}) do
+    FW = newReader({raw={},lines={"Rating ring",sample[1]}})
+    locale = sample[4] or "enUS"
+    item = assert(FW:GetItem("item:" .. (950+index)))
+    equal(item.ratingStats.meleeCrit,sample[2]); equal(item.ratingStats.spellCrit,sample[3])
+    equal(next(item.percentStats),nil,"ratings cannot be guessed into percentages")
+end
+
+FW = newReader({raw={},lines={"Spell mystery ring",
+    "Equip: Improves your spell critical strike chance by an unknown amount."}})
+item = assert(FW:GetItem("item:960"))
+equal(item.unresolvedStats.spellCrit,true); equal(item.unresolvedStats.meleeCrit,nil)
+
+FW = newReader({raw={},lines={"Unsafe critical ring",
+    "Equip: Increases your critical strike damage by 20%.",
+    "Equip: Increases your spell critical strike chance by 10% while casting.",
+    "Equip: Has a chance to increase your spell critical strike chance by 5%.",
+    "Use: Increases your spell critical strike chance by 20% for 10 sec.",
+    "(2) Set: Increases your critical strike chance by 5%."}})
+item = assert(FW:GetItem("item:961"))
+equal(next(item.percentStats),nil,"critical damage, conditional effects and set bonuses are not static chance")
+equal(item.percentStats.hit,nil)
+equal(next(item.unresolvedStats),nil,"critical damage cannot mark missing critical chance")
+equal(item.partial,false,"a known out-of-schema damage multiplier does not block upgrades")
+equal(item.ignoredTooltipStats[1].reason,"Critical damage bonuses have no stat in the weight schema.")
+FW = newReader({raw={},lines={"Bague critique","Équipé : Augmente les dégâts de vos coups critiques de 20%."}})
+locale="frFR"
+item=assert(FW:GetItem("item:962"))
+equal(next(item.percentStats),nil); equal(next(item.unresolvedStats),nil); equal(item.partial,false)
+
+-- Enchants use the same channels but remain absent from the Base variant.
+FW = newReader({raw={},lines={"Enchanted critical ring","Critical Strike +1%"}})
+C_TooltipInfo.GetHyperlink = function(link)
+    local rows={{leftText="Enchanted critical ring"},{leftText="Critical Strike +1%"}}
+    if link:match("item:970:42") then rows[#rows+1]={leftText="Enchanted: Spell Critical Strike +2% and Melee Critical Strike +3%"} end
+    return {lines=rows}
+end
+splitProfile = assert(FW:CreateProfile("Crit variants",{meleeCrit=2,spellCrit=7}))
+item = assert(FW:GetItem("item:970:42:0"))
+equal(item.percentStats.meleeCrit,4); equal(item.percentStats.spellCrit,3)
+equal(item.partial,false)
+equal(FW:GetScore(item.link,splitProfile),29)
+equal(FW:GetBaseScore(item.link,splitProfile),9,"Base excludes both enchant critical channels")
+FW = newReader({raw={ITEM_MOD_CRIT_MELEE_RATING_SHORT=10},lines={"Enchanted rating ring",
+    "Enchanted: Spell Critical Strike Rating +6 and Melee Critical Strike Rating +4"}})
+item = assert(FW:GetItem("item:971:42"))
+equal(item.ratingStats.meleeCrit,14); equal(item.ratingStats.spellCrit,6)
+equal(item.unresolvedStats.meleeCrit,true); equal(item.unresolvedStats.spellCrit,true)
+equal(item.partial,false)
+FW = newReader({raw={ITEM_MOD_CRIT_RATING_SHORT=10},lines={"Unknown base critical ring",
+    "Enchanted: Spell Critical Strike +1%"}})
+item = assert(FW:GetItem("item:972:42"))
+equal(item.percentStats.spellCrit,1,"known enchant percentage is retained as a subtotal")
+equal(item.unresolvedStats.spellCrit,true,"an enchant cannot resolve unknown base spell critical chance")
+equal(item.unresolvedStats.meleeCrit,true,"a spell enchant cannot resolve melee chance")
+FW = newReader({raw={ITEM_MOD_CRIT_RATING_SHORT=10},lines={"Known spell base critical ring",
+    "Spell Critical Strike +2%","Enchanted: Spell Critical Strike +1%"}})
+item = assert(FW:GetItem("item:973:42"))
+equal(item.percentStats.spellCrit,3)
+equal(item.unresolvedStats.spellCrit,nil,"an inherent percentage does resolve its own API unit")
+equal(item.unresolvedStats.meleeCrit,true,"spell percentages do not resolve unknown melee ratings")
+
+FW = newReader({raw={},lines={"Physical scope ring","Critical Strike +1%",
+    "Physical Critical Strike +2%","Melee Critical Strike +1%","Melee Critical Strike +2%",
+    "Ranged Critical Strike +3%"}})
+item=assert(FW:GetItem("item:974"))
+equal(item.percentStats.meleeCrit,6,"generic plus all-attack bonuses add to the largest attack-specific total")
+equal(item.percentStats.spellCrit,1,"physical scope bonuses never leak into spell chance")
+FW = newReader({raw={},lines={"Matching attack scopes","Melee Critical Strike +1%","Ranged Critical Strike +1%"}})
+item=assert(FW:GetItem("item:975"))
+equal(item.percentStats.meleeCrit,1,"one percent to melee and ranged is one percent, not two")
+equal(item.percentStats.spellCrit,nil)
+FW = newReader({raw={},lines={"Enchanted attack scopes","Critical Strike +1%",
+    "Enchanted: Melee Critical Strike +1% and Ranged Critical Strike +1%"}})
+item=assert(FW:GetItem("item:976:42"))
+equal(item.percentStats.meleeCrit,2,"enchant attack scopes use the same maximum")
+equal(item.percentStats.spellCrit,1)
+FW = newReader({raw={},lines={"Combined enchant scope","Enchanted: Melee and Ranged Critical Strike +1%"}})
+item=assert(FW:GetItem("item:977:42"))
+equal(item.percentStats.meleeCrit,1); equal(item.percentStats.spellCrit,nil)
+equal(item.partial,false,"an attack-scope conjunction is not an enchant clause separator")
+
+FW = newReader({raw={ITEM_MOD_CRIT_SPELL_RATING_SHORT=8,ITEM_MOD_CRIT_MELEE_RATING_SHORT=14},
+    lines={"Rating scopes","Critical Strike Rating +5","Spell Critical Strike Rating +7",
+        "Melee Critical Strike Rating +2","Ranged Critical Strike Rating +2","Melee Critical Strike Rating +3"}})
+item=assert(FW:GetItem("item:978"))
+equal(item.ratingStats.meleeCrit,14,"API aliases max against the aggregated tooltip total")
+equal(item.ratingStats.spellCrit,12,"distinct generic and spell rating rows add before the API maximum")
+equal(item.unresolvedStats.meleeCrit,true);equal(item.unresolvedStats.spellCrit,true)
+FW = newReader({raw={},lines={"Mixed crit units","Critical Strike +1%","Spell Critical Strike Rating +6"}})
+item=assert(FW:GetItem("item:979"))
+equal(item.percentStats.spellCrit,1);equal(item.unresolvedStats.spellCrit,true,"known % cannot resolve another rating effect")
+equal(item.unresolvedStats.meleeCrit,nil)
+FW = newReader({raw={},lines={"Enchanted mixed units","Critical Strike +1%","Enchanted: Spell Critical Strike Rating +6"}})
+item=assert(FW:GetItem("item:980:42"))
+equal(item.percentStats.spellCrit,1);equal(item.unresolvedStats.spellCrit,true,"known base % cannot resolve an enchant rating")
+equal(item.unresolvedStats.meleeCrit,nil)
 
 print("Items tests passed")

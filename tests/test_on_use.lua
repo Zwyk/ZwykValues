@@ -82,14 +82,17 @@ local function effect(stats)
         amount=100, duration=6, cooldown=120, uptime=.05, stats=stats or {strength=100},
         percentStats={}, ratingStats={}}
 end
-local function secondaryEffect(unit, amount)
-    local normalized = {text="Use: Critical strike +" .. amount .. (unit == "percent" and "%" or " rating") .. " for 6 sec. (2 Min Cooldown)",
+local function secondaryEffect(unit, amount, scope)
+    local label = scope == "spell" and "Spell critical strike" or scope == "melee" and "Melee critical strike" or "Critical strike"
+    local normalized = {text="Use: " .. label .. " +" .. amount .. (unit == "percent" and "%" or " rating") .. " for 6 sec. (2 Min Cooldown)",
         index=3, amount=amount, duration=6, cooldown=120, uptime=.05,
         stats={}, percentStats={}, ratingStats={}}
-    normalized[unit == "percent" and "percentStats" or "ratingStats"].crit = amount
+    local values = normalized[unit == "percent" and "percentStats" or "ratingStats"]
+    if scope ~= "spell" then values.meleeCrit = amount end
+    if scope ~= "melee" then values.spellCrit = amount end
     return normalized
 end
-local profile = assert(FW:CreateProfile("Average", {strength=2, crit=10}))
+local profile = assert(FW:CreateProfile("Average", {strength=2, meleeCrit=4, spellCrit=6}))
 local second = assert(FW:CreateProfile("Negative", {strength=-1}))
 local full = fixture("item:100:8481", {stats={strength=20}, onUseStats={strength=5}, effects={effect()}})
 local base = fixture("item:100:0", {stats={strength=10}, onUseStats={strength=5}, effects={effect()}})
@@ -119,7 +122,7 @@ equal(score, 45); equal(metadata.averageUseGain, 15, "weight revisions invalidat
 equal(reads[base.link], beforeReads, "weight changes reuse parsed effect amounts")
 assert(FW:UpdateProfile(profile.id, {weights={strength=2}}))
 
-local rating = fixture("item:101:0", {stats={strength=4}, onUseRatingStats={crit=12}, effects={secondaryEffect("rating",240)}})
+local rating = fixture("item:101:0", {stats={strength=4}, onUseRatingStats={meleeCrit=12,spellCrit=12}, effects={secondaryEffect("rating",240)}})
 score, record, _, metadata = FW:GetAverageUseScore(rating.link, profile)
 equal(score, 8); equal(metadata.averageUseGain, 0)
 check(metadata.averageUseIncomplete, "rating amounts cannot silently become percentages")
@@ -131,19 +134,19 @@ score, _, _, metadata = FW:GetAverageUseScore(rating.link, profile)
 equal(profile.secondaryUnit, "percent", "legacy rating updates cannot select rating scoring")
 equal(score, 8); equal(metadata.averageUseGain, 0)
 check(metadata.averageUseIncomplete, "rating-only effects remain unavailable in percentage scoring")
-local percentage = fixture("item:102:0", {onUsePercentStats={crit=.5}, effects={secondaryEffect("percent",10)}})
+local percentage = fixture("item:102:0", {onUsePercentStats={meleeCrit=.5,spellCrit=.5}, effects={secondaryEffect("percent",10)}})
 score, _, _, metadata = FW:GetAverageUseScore(percentage.link, profile)
 equal(score, 5); equal(metadata.averageUseGain, 5)
 check(not metadata.averageUseIncomplete, "percentage effects always use the percentage weight")
 equal(#metadata.averageUseWarnings, 0)
-assert(FW:UpdateProfile(profile.id, {weights={crit=0}}))
+assert(FW:UpdateProfile(profile.id, {weights={meleeCrit=0,spellCrit=0}}))
 score, _, _, metadata = FW:GetAverageUseScore(rating.link, profile)
 equal(score, 8); check(not metadata.averageUseIncomplete, "an unweighted missing percentage does not make the average incomplete")
 local defense = fixture("item:103:0", {onUsePercentStats={defense=2.5}, effects={effect({})}})
 local defenseProfile = assert(FW:CreateProfile("Defense skill", {defense=4}))
 equal(FW:GetAverageUseScore(defense.link, defenseProfile), 10, "defense weights retain defense skill points")
-assert(FW:UpdateProfile(profile.id, {weights={crit=10}, secondaryUnit="percent"}))
-local mixedUnits = fixture("item:114:0", {onUsePercentStats={crit=.5}, onUseRatingStats={crit=12},
+assert(FW:UpdateProfile(profile.id, {weights={meleeCrit=4,spellCrit=6}, secondaryUnit="percent"}))
+local mixedUnits = fixture("item:114:0", {onUsePercentStats={meleeCrit=.5,spellCrit=.5}, onUseRatingStats={meleeCrit=12,spellCrit=12},
     effects={secondaryEffect("percent",10), secondaryEffect("rating",240)}})
 score, _, _, metadata = FW:GetAverageUseScore(mixedUnits.link, profile)
 equal(score, 5); check(metadata.averageUseIncomplete, "one readable effect cannot conceal another effect in the wrong unit")
@@ -154,6 +157,39 @@ equal(score, 5); equal(metadata.averageUseGain, 5)
 check(metadata.averageUseIncomplete, "mixed effects retain only known percentages after a legacy rating update")
 contains(table.concat(metadata.averageUseWarnings, " "), "percentage points")
 assert(FW:UpdateProfile(profile.id, {secondaryUnit="percent"}))
+
+-- Crit channels remain separate through static/Base scoring, cached averages
+-- and equipped comparisons. A generic percentage bonus supplies both channels;
+-- an explicitly scoped bonus supplies only its named channel.
+local spellUse = fixture("item:118:0", {onUsePercentStats={spellCrit=.5}, effects={secondaryEffect("percent",10,"spell")}})
+local meleeUse = fixture("item:119:0", {onUsePercentStats={meleeCrit=.5}, effects={secondaryEffect("percent",10,"melee")}})
+equal(FW:GetAverageUseScore(spellUse.link, profile), 3, "spell-only uses apply only the spell Crit weight")
+equal(FW:GetAverageUseScore(meleeUse.link, profile), 2, "attack-only uses apply only the melee Crit weight")
+local distinctUses = fixture("item:120:0", {onUsePercentStats={meleeCrit=.5,spellCrit=1},
+    effects={secondaryEffect("percent",10),secondaryEffect("percent",10,"spell")}})
+equal(FW:GetAverageUseScore(distinctUses.link, profile), 8, "separate equal-sized generic and spell effects remain additive")
+local critFull = fixture("item:121:8481", {percentStats={meleeCrit=2,spellCrit=3}})
+local critBase = fixture("item:121:0", {percentStats={meleeCrit=1,spellCrit=1},
+    onUsePercentStats={meleeCrit=.5,spellCrit=.5}, effects={secondaryEffect("percent",10)}})
+local critEquipped = fixture("item:122:0", {percentStats={spellCrit=2}})
+equal(FW:GetScore(critFull.link, profile), 26, "full item score preserves unequal Crit weights")
+equal(FW:GetBaseScore(critFull.link, profile), 10, "Base scoring uses the unenchanted Crit channels")
+score, record, _, metadata = FW:GetAverageUseScore(critFull.link, profile)
+equal(score, 15); equal(record, critBase); equal(metadata.averageUseGain, 5)
+inventory[13], inventory[14] = critEquipped.link, nil
+local critComparison = assert(FW:CompareItem(critFull.link, profile))
+equal(critComparison.comparisons[1].baseline, 12); equal(critComparison.comparisons[1].delta, 14)
+local critAverage = assert(FW:CompareAverageUseItem(critFull.link, profile))
+equal(critAverage.comparisons[1].baseline, 12); equal(critAverage.comparisons[1].delta, 3)
+beforeCalls, beforeReads = weightedCalls, reads[critBase.link]
+equal(FW:GetAverageUseScore(critFull.link, profile), 15)
+equal(weightedCalls, beforeCalls, "split Crit averages reuse their profile cache")
+equal(reads[critBase.link], beforeReads, "split Crit averages reuse the parsed Base record")
+assert(FW:UpdateProfile(profile.id, {weights={spellCrit=8}}))
+equal(FW:GetScore(critFull.link, profile), 32, "changing spell Crit leaves the melee weight unchanged")
+equal(FW:GetAverageUseScore(critFull.link, profile), 18, "weight revisions invalidate split Crit average scores")
+assert(FW:UpdateProfile(profile.id, {weights={spellCrit=6}}))
+
 local temporaryArmor = fixture("item:116:0", {stats={armor=100}, onUseStats={armorBonus=10},
     effects={{amount=120,duration=10,cooldown=120,uptime=1/12,stats={armorBonus=120},percentStats={},ratingStats={}}}})
 local armorProfile = assert(FW:CreateProfile("Armor bonus", {armor=2,armorBonus=3}))

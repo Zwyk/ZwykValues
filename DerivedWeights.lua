@@ -622,7 +622,7 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         else ranged,rangedSource=attackRate(4,true,ctx,increment) end
         add("rangedAttackPower", ranged and ranged*scale, rangedSource)
         local crit, critSource=critRate(4, ctx, increment)
-        add("crit", crit and crit*scale, critSource, "%")
+        add("spellCrit", crit and crit*scale, critSource, "%")
         for _, stat in ipairs({"spellDamage","healing","armorBonus"}) do
             local gain=gains[stat]
             if gain then add(stat,gain.rate and gain.rate*scale,gain.source) end
@@ -700,7 +700,7 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         addAttack(2)
         add("armorBonus", 2*increment, "Vanilla fallback: armor gained from agility is bonus armor.")
         local rate, source=critRate(2, ctx, increment)
-        add("crit", rate, source, "%")
+        add("meleeCrit", rate, source, "%")
         -- Dodge is a separate conversion: never divide total dodge (which
         -- includes base chance and defense) by agility.
         local fallback=critPerAgility[ctx.class] and critPerAgility[ctx.class][ctx.level]

@@ -56,7 +56,10 @@ end
 FW:Initialize()
 local oldProfile=assert(FW:ImportProfile('{"intellect":1,"crit":10}',"Old profile"))
 close(oldProfile.weights.mana,0,"old weight objects do not acquire an inferred Mana weight")
-local profile=assert(FW:CreateProfile("Caster",{mana=0.25,crit=10}))
+close(oldProfile.weights.meleeCrit,5,"legacy Crit splits evenly into attack crit")
+close(oldProfile.weights.spellCrit,5,"legacy Crit splits evenly into spell crit")
+check(oldProfile.weights.crit==nil,"legacy Crit is not retained as a third weight")
+local profile=assert(FW:CreateProfile("Caster",{mana=0.25,spellCrit=10,meleeCrit=100}))
 assert(FW:UpdateProfile(profile.id,{calculationOptions={kings=true,useTalents=true}}))
 local function calculate(key)
     local result=FW:GetDerivedWeightOptions(key,profile.weights,FW:GetDerivedWeightDefaults(profile))
@@ -73,14 +76,14 @@ assert(FW:UpdateProfile(profile.id,{weights={intellect=intellectWeight}}))
 local score,record=FW:GetScore("item:1000",profile)
 close(score,46.057,"the item score uses the applied Intellect weight")
 close(record.stats.intellect,10,"the parser retains raw item Intellect")
-check(record.stats.mana==nil and record.percentStats.crit==nil,
+check(record.stats.mana==nil and record.percentStats.meleeCrit==nil and record.percentStats.spellCrit==nil,
     "item parsing does not add Mana, crit or buffed attributes a second time")
 close(FW:GetScore("item:1002",profile),37.5,"flat Mana is weighted without Kings or Divine Intellect")
 local comparison=assert(FW:CompareItem("item:1000",profile))
 close(comparison.comparisons[1].baseline,23.0285,"equipped gear uses the same applied weight")
 close(comparison.comparisons[1].delta,23.0285)
 check(comparison.comparisons[1].status=="upgrade","the real comparison pipeline sees the upgrade")
-close(calculate("mana"),0.25,"the same assumptions recover Mana from the computed Intellect weight")
+close(calculate("mana"),0.25,"Mana uses spell Crit alone, ignoring the different melee Crit weight")
 
 local callsAfterCalculation=conversionCalls
 local readsAfterParsing=itemReads

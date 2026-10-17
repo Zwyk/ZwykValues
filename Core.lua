@@ -1,8 +1,8 @@
 local _, FW = ...
 
 FW.CACHE_LIMIT = 2000
-FW.CACHE_VERSION = 2
-local secondaryKeys = { hit = true, crit = true, haste = true, expertise = true, defense = true, dodge = true, parry = true, block = true }
+FW.CACHE_VERSION = 3
+local secondaryKeys = { hit = true, meleeCrit = true, spellCrit = true, haste = true, expertise = true, defense = true, dodge = true, parry = true, block = true }
 FW.SecondaryStatKeys = secondaryKeys
 local upgradeOptions = { upgradeBags = true, upgradeRolls = true, upgradeChat = true }
 local defaultColor = { r = 0.35, g = 0.8, b = 1 }
@@ -177,9 +177,12 @@ end
 
 local function validWeights(weights)
     if not plainObject(weights) then return nil, "Weights must be a JSON object of stat names and numbers." end
+    if weights.crit ~= nil and (weights.meleeCrit ~= nil or weights.spellCrit ~= nil) then
+        return nil, "Legacy crit cannot be mixed with meleeCrit or spellCrit weights."
+    end
     local unknown = {}
     for key, value in pairs(weights) do
-        if not FW.StatByKey[key] then
+        if not FW.StatByKey[key] and key ~= "crit" then
             unknown[#unknown + 1] = key
         elseif not finite(value) then
             return nil, "Weight for '" .. key .. "' must be a finite number."
@@ -189,7 +192,11 @@ local function validWeights(weights)
         table.sort(unknown)
         return nil, "Unknown stat key(s): " .. table.concat(unknown, ", ") .. "."
     end
-    return cloneWeights(weights)
+    local result = cloneWeights(weights)
+    -- A generic item crit bonus supplies both channels. Splitting an old
+    -- combined weight preserves its value without inventing a new priority.
+    if weights.crit ~= nil then result.meleeCrit, result.spellCrit = weights.crit / 2, weights.crit / 2 end
+    return result
 end
 
 local function validName(name)
@@ -380,9 +387,14 @@ function FW:Initialize()
         local name = validName(profile.name)
         if not name then db.profiles[id] = nil return end
         local weights = {}
+        local oldWeights = type(profile.weights) == "table" and profile.weights or {}
+        local migrateCrit = oldWeights.crit ~= nil
         for _, definition in ipairs(self.StatDefinitions) do
-            local value = type(profile.weights) == "table" and profile.weights[definition.key]
+            local value = oldWeights[definition.key]
             weights[definition.key] = finite(value) and value or 0
+        end
+        if finite(oldWeights.crit) and oldWeights.meleeCrit == nil and oldWeights.spellCrit == nil then
+            weights.meleeCrit, weights.spellCrit = oldWeights.crit / 2, oldWeights.crit / 2
         end
         profile.id, profile.name, profile.weights = id, name, weights
         profile.active = profile.active ~= false
@@ -398,7 +410,7 @@ function FW:Initialize()
         profile.calculationOptions = profile.calculationOptions and validCalculationOptions(profile.calculationOptions) or nil
         profile.itemFilters = cloneItemFilters(profile.itemFilters)
         profile.revision = finite(profile.revision) and math.max(1, math.floor(profile.revision)) or 1
-        if profile.secondaryUnit == "rating" then profile.revision = profile.revision + 1 end
+        if profile.secondaryUnit == "rating" or migrateCrit then profile.revision = profile.revision + 1 end
         profile.secondaryUnit = "percent"
         normalized[#normalized + 1], seen[id] = id, true
     end
@@ -590,7 +602,11 @@ function FW:UpdateProfile(id, changes)
         if not checked then return nil, errorMessage end
         replacement.weights = cloneWeights(profile.weights)
         -- Partial programmatic updates leave unspecified weights unchanged.
-        for key in pairs(changes.weights) do replacement.weights[key] = checked[key] end
+        for key in pairs(changes.weights) do
+            if key == "crit" then
+                replacement.weights.meleeCrit, replacement.weights.spellCrit = checked.meleeCrit, checked.spellCrit
+            else replacement.weights[key] = checked[key] end
+        end
     end
     if changes.itemFilters ~= nil then
         replacement.itemFilters, errorMessage = validItemFilters(changes.itemFilters, profile.itemFilters)
@@ -691,7 +707,9 @@ function FW:ImportProfile(source, fallbackName)
         unit, errorMessage = validUnit(decoded.secondaryUnit or "percent")
         if not unit then return nil, errorMessage end
         if decoded.secondaryUnit == "rating" then
-            warnings[#warnings + 1] = "Legacy rating profile imported in percentage points; numeric weights are unchanged. Defense uses defense skill points."
+            warnings[#warnings + 1] = decoded.weights.crit ~= nil
+                and "Legacy rating profile imported in percentage points. Defense uses defense skill points; combined critical strike migration is described separately."
+                or "Legacy rating profile imported in percentage points; numeric weights are unchanged. Defense uses defense skill points."
         end
         local importedFilters = decoded.itemFilters
         if importedFilters == nil then importedFilters = {} end
@@ -705,6 +723,10 @@ function FW:ImportProfile(source, fallbackName)
         color = { r = defaultColor.r, g = defaultColor.g, b = defaultColor.b }
         unit = "percent"
         warnings[#warnings + 1] = "Bare weights use percentage points for secondary stats; defense uses defense skill points."
+    end
+    local sourceWeights = decoded.weights or decoded
+    if sourceWeights.crit ~= nil then
+        warnings[#warnings + 1] = "Legacy critical strike weight split evenly between meleeCrit and spellCrit; generic item crit keeps its previous total value."
     end
     local profile
     profile, errorMessage = self:CreateProfile(name, weights)
@@ -911,6 +933,10 @@ function FW:GetScore(link, profile, ignoreFilters)
                 scoreWarnings[#scoreWarnings + 1] = label .. " is unavailable in " .. unit .. "; its contribution is omitted."
             end
             value = 0
+        elseif (profile.weights[key] or 0) ~= 0 and record.unresolvedStats and record.unresolvedStats[key] then
+            local label = self.StatByKey[key] and self.StatByKey[key].label or key
+            missingStats[key] = true
+            scoreWarnings[#scoreWarnings + 1] = label .. " could not be read completely; its known value contributes to this subtotal."
         end
         stats[key] = value
     end

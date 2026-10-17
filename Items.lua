@@ -1,5 +1,5 @@
 local _, FW = ...
-local MAX_ITEMS, PARSER_VERSION = 2000, 10
+local MAX_ITEMS, PARSER_VERSION = 2000, 11
 local recentItems, recentCount, recentCache, recentEquipment = {}, 0, nil, nil
 local metadataRetries = setmetatable({}, {__mode="k"})
 local onUseRetries = setmetatable({}, {__mode="k"})
@@ -183,7 +183,8 @@ for _, school in ipairs({ "ARCANE", "FIRE", "NATURE", "FROST", "SHADOW", "HOLY" 
 end
 local secondaryAliases = {
     hit = { "HIT", "HIT_MELEE", "HIT_RANGED", "HIT_SPELL" },
-    crit = { "CRIT", "CRIT_MELEE", "CRIT_RANGED", "CRIT_SPELL" },
+    meleeCrit = { "CRIT_MELEE", "CRIT_RANGED", "MELEE_CRIT", "RANGED_CRIT" },
+    spellCrit = { "CRIT_SPELL", "SPELL_CRIT" },
     haste = { "HASTE", "HASTE_MELEE", "HASTE_RANGED", "HASTE_SPELL" },
     expertise = { "EXPERTISE" }, dodge = { "DODGE" }, parry = { "PARRY" },
     block = { "BLOCK" }, defense = { "DEFENSE_SKILL", "DEFENSE" },
@@ -193,6 +194,11 @@ for key, aliases in pairs(secondaryAliases) do
         ratings["ITEM_MOD_" .. alias .. "_RATING_SHORT"] = key
         untyped["ITEM_MOD_" .. alias .. "_SHORT"] = key
     end
+end
+-- A generic API alias covers both channels. Scoped aliases are alternative
+-- API representations, so each channel still takes a maximum, not a sum.
+for _, suffix in ipairs({ "_RATING_SHORT", "_SHORT" }) do
+    (suffix == "_RATING_SHORT" and ratings or untyped)["ITEM_MOD_CRIT" .. suffix] = { "meleeCrit", "spellCrit" }
 end
 for _, mapping in ipairs({ absolute, ratings, untyped }) do
     local extras = {}
@@ -228,6 +234,10 @@ local function maximum(map, key, value)
 end
 local function add(map, key, value)
     if value ~= nil then map[key] = (map[key] or 0) + value end
+end
+local function eachStat(mapping, callback)
+    if type(mapping) == "table" then for _, key in ipairs(mapping) do callback(key) end
+    elseif mapping then callback(mapping) end
 end
 local function warn(record, message)
     record.warnings[#record.warnings + 1] = message
@@ -551,7 +561,7 @@ local labels = {
     armor = { "armor", "armure" }, armorBonus = { "bonus armor", "armure supplémentaire" },
     blockValue = { "block value", "valeur de blocage", "block", "blocage" }, blockValueBonus = { "bonus block value", "bonus à la valeur de blocage" },
     hit = { "hit", "hit chance", "hit rating", "toucher", "chances de toucher", "score de toucher" },
-    crit = { "crit", "critical strike", "critical strike chance", "critical strike rating", "critical hit", "critique", "coup critique", "chances de coup critique", "score de coup critique" },
+    meleeCrit = {}, spellCrit = {},
     haste = { "haste", "haste rating", "hâte", "score de hâte" },
     expertise = { "expertise", "expertise rating", "score d'expertise" },
     defense = { "defense", "defense skill", "défense", "compétence de défense" },
@@ -559,6 +569,46 @@ local labels = {
     parry = { "parry", "parry chance", "parry rating", "parade", "score de parade" },
     block = { "block chance", "block rating", "chances de blocage", "score de blocage" },
 }
+local genericCritLabels = { "crit", "critical strike", "critical strike chance", "critical strike rating",
+    "critical hit", "critical hit chance", "critical hit rating", "chance to get a critical strike",
+    "chance to inflict a critical strike", "chance to critically hit", "critique", "coup critique",
+    "chances de coup critique", "score de coup critique", "chances d'infliger un coup critique",
+    "chances d'obtenir un coup critique", "chances de coups critiques" }
+for _, key in ipairs({ "meleeCrit", "spellCrit" }) do
+    for _, label in ipairs(genericCritLabels) do labels[key][#labels[key]+1] = label end
+end
+for _, scope in ipairs({ "melee", "ranged", "physical", "melee and ranged", "spell" }) do
+    local key = scope == "spell" and "spellCrit" or "meleeCrit"
+    for _, label in ipairs({ "crit", "critical strike", "critical strike chance", "critical strike rating", "critical hit", "critical hit chance", "critical hit rating" }) do
+        labels[key][#labels[key]+1] = scope .. " " .. label
+    end
+end
+for _, scope in ipairs({ "melee attacks", "ranged attacks", "physical attacks", "melee and ranged attacks", "attacks", "spells", "your spells" }) do
+    local key = scope:find("spell") and "spellCrit" or "meleeCrit"
+    for _, label in ipairs({ "critical strike", "critical strike chance", "critical strike rating", "critical hit chance",
+        "chance to get a critical strike", "chance to inflict a critical strike", "chance to critically hit" }) do
+        labels[key][#labels[key]+1] = label .. " with " .. scope
+    end
+    labels[key][#labels[key]+1] = "critical strike chance of " .. scope
+end
+for _, key in ipairs({"meleeCrit","spellCrit"}) do
+    for _, scope in ipairs({"attacks and spells","spells and attacks","all attacks and spells"}) do
+        for _,label in ipairs({"critical strike chance","critical strike rating","chance to get a critical strike","chance to critically hit"}) do
+            labels[key][#labels[key]+1] = label .. " with " .. scope
+        end
+    end
+end
+for _, scope in ipairs({ "en mêlée", "à distance", "physique", "des sorts", "de sorts", "avec les sorts", "avec vos sorts", "avec les attaques", "avec vos attaques", "avec les attaques en mêlée", "avec les attaques à distance", "avec les attaques en mêlée et à distance" }) do
+    local key = scope:find("sort") and "spellCrit" or "meleeCrit"
+    for _, label in ipairs({ "critique", "coup critique", "chances de coup critique", "score de coup critique",
+        "chances d'infliger un coup critique", "chances d'obtenir un coup critique", "chances de coups critiques" }) do
+        labels[key][#labels[key]+1] = label .. " " .. scope
+    end
+end
+for _, scope in ipairs({ "vos sorts", "vos attaques", "vos attaques en mêlée", "vos attaques à distance" }) do
+    local key = scope:find("sort") and "spellCrit" or "meleeCrit"
+    labels[key][#labels[key]+1] = "chances de coup critique de " .. scope
+end
 local schools = { arcane = "arcanes", fire = "feu", nature = "nature", frost = "givre", shadow = "ombre", holy = "sacré" }
 for school, french in pairs(schools) do
     labels[school .. "Damage"] = { school .. " damage", "dégâts de " .. french }
@@ -582,6 +632,18 @@ local function getLabels()
             localizedLabels[key][#localizedLabels[key] + 1] = lower(clean(label))
         end
     end
+    for _, mapping in ipairs({ratings,untyped}) do
+        for global, keys in pairs(mapping) do
+            local label = _G[global]
+            if type(label) == "string" and not label:find("%%") then
+                eachStat(keys,function(key)
+                    if key == "meleeCrit" or key == "spellCrit" then
+                        localizedLabels[key][#localizedLabels[key]+1] = lower(clean(label))
+                    end
+                end)
+            end
+        end
+    end
     return localizedLabels
 end
 
@@ -592,10 +654,77 @@ local function directValue(text, label, percent)
         or number(text:match("^" .. label .. "%s*%+?%s*([%+%-]?[%d%.,]+)" .. suffix .. "$"))
 end
 
+local function statSentence(content)
+    local label, amount = content:match("^increases%s+(.+)%s+by%s+([%d%.,]+%%?)$")
+    if not label then label, amount = content:match("^improves%s+(.+)%s+by%s+([%d%.,]+%%?)$") end
+    if not label then label, amount = content:match("^augmente%s+(.+)%s+de%s+([%d%.,]+%%?)$") end
+    if not label then label, amount = content:match("^améliore%s+(.+)%s+de%s+([%d%.,]+%%?)$") end
+    if not label then return content end
+    label = label:gsub("^your%s+", ""):gsub("^the%s+", ""):gsub("^votre%s+", "")
+        :gsub("^vos%s+", ""):gsub("^la%s+", ""):gsub("^le%s+", ""):gsub("^les%s+", "")
+    return label .. " +" .. amount
+end
+
+local function scope(text)
+    local spell = text:find("spell") or text:find("sort")
+    local melee = text:find("melee") or text:find("mêlée")
+    local ranged = text:find("ranged") or text:find("distance")
+    local attack = text:find("physical") or text:find("physique")
+        or (not melee and not ranged and (text:find("attacks") or text:find("attaques")))
+    if spell and (melee or ranged or attack) then return "generic" end
+    if spell then return "spell" end
+    if attack or (melee and ranged) then return "attack" end
+    if ranged then return "ranged" end
+    if melee then return "melee" end
+    return "generic"
+end
+
+local function addScoped(map,key,channel,value)
+    map[key] = map[key] or {}; add(map[key],channel,value)
+end
+local function criticalTotal(values,key)
+    values = values or {}
+    if key == "meleeCrit" then
+        -- Melee and ranged are two attack scopes of one weight. Giving +1%
+        -- to each does not give +2% to either attack; common bonuses do add.
+        return (values.generic or 0)+(values.attack or 0)+math.max(values.melee or values.ranged or 0,values.ranged or values.melee or 0)
+    end
+    return (values.generic or 0)+(values.spell or 0)
+end
+
+-- Match complete chance/rating labels, so critical-damage bonuses and proc
+-- descriptions cannot masquerade as critical chance or ordinary Hit.
+local function criticalValues(content)
+    if not content:find("%%") and not content:find("rating",1,true) and not content:find("score",1,true) then return end
+    content = statSentence(content)
+    local percentages, values = {}, {}
+    for _, key in ipairs({"meleeCrit","spellCrit"}) do
+        for _, label in ipairs(getLabels()[key]) do
+            local rating = label:find("rating",1,true) or label:find("score",1,true)
+            local value = directValue(content,label,not rating)
+            if value then
+                (rating and values or percentages)[key] = value
+                break
+            end
+        end
+    end
+    if next(percentages) or next(values) then return percentages,values end
+end
+
 local professionLabels
 local function ignoredTooltipReason(content)
     if content:match("^spell damage received is reduced by [%d%.,]+$") then
         return "Spell damage received reduction has no stat in the weight schema."
+    end
+    local criticalDamage = statSentence(content)
+    for _,label in ipairs({"critical strike damage","critical hit damage","spell critical strike damage",
+        "spell critical hit damage","melee critical strike damage","ranged critical strike damage",
+        "physical critical strike damage","damage done by your critical strikes","damage done by your spell critical strikes",
+        "damage bonus of your critical strikes","dégâts de vos coups critiques","dégâts des coups critiques",
+        "dégâts des coups critiques des sorts","dégâts de vos coups critiques avec les sorts"}) do
+        if directValue(criticalDamage,label,true) then
+            return "Critical damage bonuses have no stat in the weight schema."
+        end
     end
     if not professionLabels then
         professionLabels = {}
@@ -620,12 +749,22 @@ local function ignoredTooltipReason(content)
 end
 
 local function enchantValues(content)
-    local values, unknown = {}, {}
+    local values, percentages, ratings, unknown = {}, {}, {}, {}
     -- Split only explicit enchant conjunctions. Each clause must still match a
     -- complete stat label/value; a known clause cannot hide an unknown effect.
-    content = content:gsub(" and ", "\n"):gsub(" et ", "\n")
+    content = content:gsub("melee and ranged","melee \001 ranged")
+        :gsub("attacks and spells","attacks \001 spells"):gsub("spells and attacks","spells \001 attacks")
+        :gsub("mêlée et à distance","mêlée \002 à distance")
+        :gsub(" and ", "\n"):gsub(" et ", "\n")
     for clause in (content .. "\n"):gmatch("(.-)\n") do
+        clause = clause:gsub("\001","and"):gsub("\002","et")
         local handled = false
+        local critPercent, critRating = criticalValues(clause)
+        if critPercent then
+            for key,value in pairs(critPercent) do addScoped(percentages,key,scope(clause),value) end
+            for key,value in pairs(critRating) do addScoped(ratings,key,scope(clause),value) end
+            handled = true
+        end
         for key, list in pairs(getLabels()) do
             if not FW.StatByKey[key].secondary then
                 for _, label in ipairs(list) do
@@ -643,7 +782,7 @@ local function enchantValues(content)
         end
         if not handled then unknown[#unknown + 1] = clause end
     end
-    return values, #unknown == 0, table.concat(unknown, " and ")
+    return values, #unknown == 0, table.concat(unknown, " and "), percentages, ratings
 end
 
 local function conditional(text)
@@ -659,15 +798,18 @@ local function conditional(text)
         or text:find("si vous ") or text:find("en forme ")
 end
 
-local function scope(text)
-    local spell = text:find("spell") or text:find("sort")
-    local melee = text:find("melee") or text:find("mêlée")
-    local ranged = text:find("ranged") or text:find("distance")
-    if spell and (melee or ranged) then return "generic" end
-    if spell then return "spell" end
-    if ranged then return "ranged" end
-    if melee then return "melee" end
-    return "generic"
+local function markUnresolvedLabels(record, content)
+    local channel = scope(content)
+    for key,list in pairs(getLabels()) do
+        local allowed = (key ~= "meleeCrit" and key ~= "spellCrit") or channel == "generic"
+            or (key == "spellCrit" and channel == "spell")
+            or (key == "meleeCrit" and channel ~= "spell")
+        if allowed then
+            for _,label in ipairs(list) do
+                if content:find(label,1,true) then record.unresolvedStats[key] = true; break end
+            end
+        end
+    end
 end
 
 function FW:IsPotentialStatLine(line)
@@ -752,6 +894,12 @@ end
 -- stacks and conditional effects are not stat amounts and cannot be averaged.
 local function useValues(content)
     local stats, percentages, ratings = {}, {}, {}
+    local critPercent, critRating = criticalValues(content)
+    if critPercent then
+        local _,amount = next(next(critPercent) and critPercent or critRating)
+        if positive(amount) then return stats,critPercent,critRating,amount end
+        return
+    end
     local value = number(content:match("^increases spell power by ([%d%.,]+)$"))
         or number(content:match("^increases your spell power by ([%d%.,]+)$"))
         or number(content:match("^augmente la puissance des sorts de ([%d%.,]+)$"))
@@ -778,15 +926,7 @@ local function useValues(content)
         stats[(content:find("^increases healing") or content:find("^augmente les soins")) and "healing" or "spellDamage"] = value
         return stats, percentages, ratings, value
     end
-    local label, amount = content:match("^increases%s+(.+)%s+by%s+([%d%.,]+%%?)$")
-    if not label then label, amount = content:match("^improves%s+(.+)%s+by%s+([%d%.,]+%%?)$") end
-    if not label then label, amount = content:match("^augmente%s+(.+)%s+de%s+([%d%.,]+%%?)$") end
-    if not label then label, amount = content:match("^améliore%s+(.+)%s+de%s+([%d%.,]+%%?)$") end
-    if label then
-        label = label:gsub("^your%s+", ""):gsub("^the%s+", ""):gsub("^votre%s+", "")
-            :gsub("^vos%s+", ""):gsub("^la%s+", ""):gsub("^le%s+", ""):gsub("^les%s+", "")
-        content = label .. " +" .. amount
-    end
+    content = statSentence(content)
     value = directValue(content,"all stats",false) or directValue(content,"toutes les caractéristiques",false)
     if positive(value) then
         for _, key in ipairs({"strength","agility","stamina","intellect","spirit"}) do stats[key] = value end
@@ -794,7 +934,7 @@ local function useValues(content)
     end
     value = directValue(content,"defense rating",false) or directValue(content,"score de défense",false)
     if positive(value) then ratings.defense=value; return stats,percentages,ratings,value end
-    for _, alias in ipairs({{"hit","chance to hit"},{"crit","chance to get a critical strike"},
+    for _, alias in ipairs({{"hit","chance to hit"},
         {"dodge","chance to dodge"},{"parry","chance to parry"},{"block","chance to block"},
         {"haste","attack speed"},{"haste","vitesse d'attaque"}}) do
         value = directValue(content,alias[2],true)
@@ -802,7 +942,7 @@ local function useValues(content)
     end
     for key, list in pairs(getLabels()) do
         local definition = FW.StatByKey[key]
-        for _, statLabel in ipairs(list) do
+        for _, statLabel in ipairs(key ~= "meleeCrit" and key ~= "spellCrit" and list or {}) do
             local rating = statLabel:find("rating", 1, true) or statLabel:find("score", 1, true)
             local percent = definition.secondary and key ~= "defense" and not rating
             value = directValue(content, statLabel:gsub("’", "'"), percent)
@@ -821,7 +961,7 @@ local function scanUse(record, details, readable)
     record.onUseEffects, record.onUseUnsupported, record.onUseRetryable = {}, {}, false
     local now = GetTime and GetTime()
     if now then onUseRetries[record] = now+1 end
-    local usedCooldowns, setSection = {}, false
+    local usedCooldowns, setSection, criticalPercentages, criticalRatings = {}, false, {}, {}
     local function rowText(row)
         return row and {clean(row.leftText), clean(row.rightText)} or {}
     end
@@ -875,13 +1015,20 @@ local function scanUse(record, details, readable)
                         record.onUseEffects[#record.onUseEffects+1] = {text=text,index=row.index or rowIndex,
                             amount=amount,duration=duration,cooldown=cooldown,uptime=uptime,
                             stats=stats,percentStats=percentages,ratingStats=ratings}
-                        for _, pair in ipairs({{stats,record.onUseStats},{percentages,record.onUsePercentStats},{ratings,record.onUseRatingStats}}) do
-                            for key, value in pairs(pair[1]) do add(pair[2],key,value*uptime) end
+                        for _, pair in ipairs({{stats,record.onUseStats},{percentages,record.onUsePercentStats,criticalPercentages},{ratings,record.onUseRatingStats,criticalRatings}}) do
+                            for key, value in pairs(pair[1]) do
+                                if pair[3] and (key == "meleeCrit" or key == "spellCrit") then
+                                    addScoped(pair[3],key,scope(effect or content),value*uptime)
+                                else add(pair[2],key,value*uptime) end
+                            end
                         end
                     end
                 end
             end
         end
+    end
+    for _, pair in ipairs({{criticalPercentages,record.onUsePercentStats},{criticalRatings,record.onUseRatingStats}}) do
+        for key,values in pairs(pair[1]) do pair[2][key] = criticalTotal(values,key) end
     end
     if #details <= 1 then
         record.onUseRetryable = true
@@ -920,7 +1067,7 @@ local function ammoDps(content)
 end
 
 local function scan(record, lines)
-    local parsed, enchants, percentages, weapon = {}, {}, {}, {}
+    local parsed, enchants, percentages, enchantPercentages, tooltipRatings, enchantRatings, weapon = {}, {}, {}, {}, {}, {}, {}
     local plainArmor, signedArmor = false, false
     local ammo = record.equipLoc == "INVTYPE_AMMO"
     local locale = GetLocale and GetLocale() or "enUS"
@@ -935,18 +1082,36 @@ local function scan(record, lines)
         if text:find("%(%d+/%d+%)") then setSection = true end
         -- Never parse the item name, set sections, use effects or triggered bonuses.
         if lineIndex > 1 and not setSection and not conditional(text) then
-            local content = text:gsub("^equip:%s*", ""):gsub("^équipé%s*:%s*", "")
+            local content = text:gsub("’", "'"):gsub("^equip:%s*", ""):gsub("^équipé%s*:%s*", "")
                 :gsub("^équipement%s*:%s*", ""):gsub("%.$", "")
             local handled = false
             local enchant = content:match("^enchanted%s*:%s*(.+)$") or content:match("^enchanté%s*:%s*(.+)$")
             local unresolvedContent
             if enchant then
-                local values
-                values, handled, unresolvedContent = enchantValues(enchant)
+                local values, enchantPercent, ratings
+                values, handled, unresolvedContent, enchantPercent, ratings = enchantValues(enchant)
                 for key, value in pairs(values) do add(enchants, key, value) end
+                for key, values in pairs(enchantPercent) do
+                    for channel,value in pairs(values) do addScoped(enchantPercentages,key,channel,value) end
+                end
+                for key,values in pairs(ratings) do
+                    for channel,value in pairs(values) do addScoped(enchantRatings,key,channel,value) end
+                end
+            else
+                local critPercent, critRating = criticalValues(content)
+                if critPercent then
+                    for key,value in pairs(critPercent) do
+                        addScoped(percentages,key,scope(content),value)
+                    end
+                    for key,value in pairs(critRating) do
+                        addScoped(tooltipRatings,key,scope(content),value)
+                        if value ~= 0 then record.unresolvedStats[key] = true end
+                    end
+                    handled = true
+                end
             end
             for key, list in pairs(getLabels()) do
-                for _, label in ipairs(list) do
+                for _, label in ipairs(key ~= "meleeCrit" and key ~= "spellCrit" and list or {}) do
                     local definition = FW.StatByKey[key]
                     local isSecondary = definition and definition.secondary
                     local isRating = label:find("rating", 1, true) or label:find("score", 1, true)
@@ -1017,7 +1182,7 @@ local function scan(record, lines)
             if not handled and pct and percentCount == 1 then
                 local key
                 -- "Critically hit" describes crit, not ordinary hit chance.
-                if content:find("critical") or content:find("critique") then key = "crit"
+                if content:find("critical") or content:find("critique") then key = nil
                 elseif content:find("hit") or content:find("toucher") then key = "hit"
                 elseif content:find("haste") or content:find("hâte") or content:find("attack speed") or content:find("vitesse d'attaque") then key = "haste"
                 elseif content:find("expertise") then key = "expertise"
@@ -1030,7 +1195,7 @@ local function scan(record, lines)
             end
             if not handled then
                 for secondary in pairs(secondaryAliases) do
-                    local name = secondary == "crit" and "critical strike" or secondary
+                    local name = secondary
                     local value = number(content:match("^increases your " .. name .. " rating by ([%d%.,]+)$"))
                         or number(content:match("^increases " .. name .. " rating by ([%d%.,]+)$"))
                     if value then
@@ -1039,7 +1204,7 @@ local function scan(record, lines)
                         handled = true
                     end
                 end
-                local frenchRatings = { hit = "toucher", crit = "coup critique", haste = "hâte", expertise = "expertise", dodge = "esquive", parry = "parade", block = "blocage", defense = "défense" }
+                local frenchRatings = { hit = "toucher", haste = "hâte", expertise = "expertise", dodge = "esquive", parry = "parade", block = "blocage", defense = "défense" }
                 for secondary, name in pairs(frenchRatings) do
                     local value = number(content:match("^augmente votre score de " .. name .. " de ([%d%.,]+)$"))
                         or number(content:match("^augmente le score de " .. name .. " de ([%d%.,]+)$"))
@@ -1111,21 +1276,10 @@ local function scan(record, lines)
             if not handled and (text:find("^equip:") or text:find("^équipé%s*:") or text:find("^équipement%s*:")) then
                 -- Surface a known static stat that could not be read. Arbitrary
                 -- procs and flavor text are excluded and do not create warnings.
-                for key, list in pairs(getLabels()) do
-                    for _, label in ipairs(list) do
-                        if (unresolvedContent or content):find(label, 1, true) then
-                            record.unresolvedStats[key] = true
-                            break
-                        end
-                    end
-                end
+                markUnresolvedLabels(record,unresolvedContent or content)
             end
             if not handled and FW:IsPotentialStatLine(line) then
-                for key, list in pairs(getLabels()) do
-                    for _, label in ipairs(list) do
-                        if (unresolvedContent or content):find(label, 1, true) then record.unresolvedStats[key] = true; break end
-                    end
-                end
+                markUnresolvedLabels(record,unresolvedContent or content)
                 unrecognized(record, line, lineIndex, "Unrecognized static item stat")
             end
         end
@@ -1153,9 +1307,30 @@ local function scan(record, lines)
             add(record.stats, key, value)
         end
     end
+    local explicitRatings = {}
+    for key,values in pairs(tooltipRatings) do
+        local value = criticalTotal(values,key)
+        maximum(record.ratingStats,key,value)
+        if value ~= 0 then explicitRatings[key] = true end
+    end
+    for key,values in pairs(enchantRatings) do
+        local value = criticalTotal(values,key)
+        add(record.ratingStats,key,value)
+        if value ~= 0 then record.unresolvedStats[key],explicitRatings[key] = true,true end
+    end
     for key, values in pairs(percentages) do
-        record.percentStats[key] = math.max(values.generic or 0, values.melee or 0, values.ranged or 0, values.spell or 0)
-        record.unresolvedStats[key] = nil
+        if key == "meleeCrit" or key == "spellCrit" then
+            -- Distinct tooltip rows describe distinct effects. Generic chance
+            -- contributes to each channel; it does not replace scoped chance.
+            record.percentStats[key] = criticalTotal(values,key)
+        else record.percentStats[key] = math.max(values.generic or 0, values.attack or 0, values.melee or 0, values.ranged or 0, values.spell or 0) end
+        -- An inherent percentage can resolve an API rating alias, but another
+        -- explicit rating effect is still an unknown extra contribution.
+        if not explicitRatings[key] then record.unresolvedStats[key] = nil end
+    end
+    for key,values in pairs(enchantPercentages) do
+        -- An enchant alone cannot resolve an unknown inherent API rating.
+        add(record.percentStats,key,criticalTotal(values,key))
     end
     if weapon.low and weapon.high then
         record.stats.lowDamage, record.stats.highDamage = weapon.low, weapon.high
@@ -1210,17 +1385,18 @@ function FW:GetItem(link, profile)
         if issecretvalue and issecretvalue(rawKey) then rawKey = nil end
         local value = number(rawValue)
         if value == nil and (absolute[rawKey] or ratings[rawKey] or untyped[rawKey]) then
-            local stat = absolute[rawKey] or ratings[rawKey] or untyped[rawKey]
-            record.unresolvedStats[stat] = true
+            eachStat(absolute[rawKey] or ratings[rawKey] or untyped[rawKey],function(stat) record.unresolvedStats[stat] = true end)
             warn(record, "Item API value unavailable for " .. rawKey)
             record.partial = true
         end
         if absolute[rawKey] then maximum(record.stats, absolute[rawKey], value)
         elseif ratings[rawKey] then
-            maximum(record.ratingStats, ratings[rawKey], value)
-            if value and value ~= 0 then record.unresolvedStats[ratings[rawKey]] = true end
+            eachStat(ratings[rawKey],function(stat)
+                maximum(record.ratingStats,stat,value)
+                if value and value ~= 0 then record.unresolvedStats[stat] = true end
+            end)
         elseif untyped[rawKey] then
-            if value and value ~= 0 then record.unresolvedStats[untyped[rawKey]] = true end
+            if value and value ~= 0 then eachStat(untyped[rawKey],function(stat) record.unresolvedStats[stat] = true end) end
         elseif rawKey == "ITEM_MOD_SPELL_POWER_SHORT" or rawKey == "ITEM_MOD_SPELL_POWER" then
             maximum(record.stats, "spellDamage", value); maximum(record.stats, "healing", value)
             if value == nil then

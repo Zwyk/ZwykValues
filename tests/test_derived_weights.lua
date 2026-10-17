@@ -54,17 +54,17 @@ close(calculate("strength",{attackPower=0.1,blockValue=2}).value,0.3)
 has(calculate("strength",{blockValue=2}).lines,"Vanilla fallback: 20 Strength")
 
 reset("ROGUE",60)
-close(calculate("agility",{attackPower=0.1,rangedAttackPower=0.2,armorBonus=0.05,crit=10,dodge=2}).value,0.883)
-has(calculate("agility",{crit=10}).lines,"Vanilla fallback")
+close(calculate("agility",{attackPower=0.1,rangedAttackPower=0.2,armorBonus=0.05,meleeCrit=10,dodge=2}).value,0.883)
+has(calculate("agility",{meleeCrit=10}).lines,"Vanilla fallback")
 reset("PALADIN",20)
-close(calculate("agility",{armorBonus=0.05,crit=10,dodge=2}).value,1.5748)
+close(calculate("agility",{armorBonus=0.05,meleeCrit=10,dodge=2}).value,1.5748)
 playerLevel=60
-close(calculate("agility",{armorBonus=0.05,crit=10,dodge=2}).value,0.7072,"Different level uses exact table row")
+close(calculate("agility",{armorBonus=0.05,meleeCrit=10,dodge=2}).value,0.7072,"Different level uses exact table row")
 reset("SHAMAN",24)
-equal(FW:GetDerivedWeightOptions("agility",{crit=1}).available,false,"Reject upstream tenfold outlier")
+equal(FW:GetDerivedWeightOptions("agility",{meleeCrit=1}).available,false,"Reject upstream tenfold outlier")
 close(calculate("agility",{armorBonus=0.5}).value,1,"Missing zero-weight rates do not block known contributions")
 reset("PALADIN",61)
-equal(FW:GetDerivedWeightOptions("agility",{crit=1}).available,false,"Do not extrapolate beyond Classic fallback tables")
+equal(FW:GetDerivedWeightOptions("agility",{meleeCrit=1}).available,false,"Do not extrapolate beyond Classic fallback tables")
 reset("DRUID",60)
 form=1
 close(calculate("agility",{attackPower=1}).value,1,"Cat agility gives AP")
@@ -74,12 +74,12 @@ GetShapeshiftFormID=nil
 equal(FW:GetDerivedWeightOptions("agility",{attackPower=1}).available,false,"Druid form must be known for AP conversion")
 
 reset("MAGE",60)
-close(calculate("intellect",{crit=10}).value,0.168)
+close(calculate("intellect",{spellCrit=10}).value,0.168)
 playerLevel=1
-close(calculate("intellect",{crit=10}).value,1.92)
-has(calculate("intellect",{crit=10}).assumptions,"First 20 Intellect")
+close(calculate("intellect",{spellCrit=10}).value,1.92)
+has(calculate("intellect",{spellCrit=10}).assumptions,"First 20 Intellect")
 reset("WARRIOR",60)
-close(calculate("intellect",{crit=10}).value,0,"Non-mana classes do not get an invented spell crit conversion")
+close(calculate("intellect",{spellCrit=10}).value,0,"Non-mana classes do not get an invented spell crit conversion")
 
 reset()
 close(calculate("stamina",{health=2}).value,20)
@@ -99,22 +99,22 @@ reset()
 -- and Forever's stat crit API is a fraction, unlike profile percentage points.
 GetCritChanceFromStat=function(index,value) equal(index,2); return 0.05+value*0.0004 end
 GetSpellCritChanceFromStat=function(index,value) equal(index,4); return 0.08+value*0.0002 end
-close(calculate("agility",{crit=10}).value,0.4)
-close(calculate("intellect",{crit=10}).value,0.2)
-has(calculate("agility",{crit=10}).lines,"Live client, PALADIN level 60")
+close(calculate("agility",{meleeCrit=10}).value,0.4)
+close(calculate("intellect",{spellCrit=10}).value,0.2)
+has(calculate("agility",{meleeCrit=10}).lines,"Live client, PALADIN level 60")
 GetAttackPowerForStat=function(index,value) return 100+value*(index==1 and 3 or 0) end
 GetRangedAttackPowerForStat=function(index,value) return 40+value*(index==1 and 0.5 or 0) end
 close(calculate("strength",{attackPower=0.2,rangedAttackPower=0.4,blockValue=0}).value,0.8,"Native AP derivatives include current class/form behavior and strip offsets")
 close(calculate("agility",{attackPower=4,rangedAttackPower=5}).value,0,"Explicit zero native AP conversion must not fall back")
 GetCritChanceFromStat=function() error("not readable in combat") end
-close(calculate("agility",{crit=10}).value,0.506,"API failures use labelled current-level fallback")
+close(calculate("agility",{meleeCrit=10}).value,0.506,"API failures use labelled current-level fallback")
 GetCritChanceFromAgility=function() return 3 end
-close(calculate("agility",{crit=10}).value,0.3,"Older dedicated stat-contribution API remains supported")
+close(calculate("agility",{meleeCrit=10}).value,0.3,"Older dedicated stat-contribution API remains supported")
 local secret={}
 issecretvalue=function(value) return value==secret end
 GetCritChanceFromAgility=function() return secret end
 GetCritChanceFromStat=function() return secret end
-close(calculate("agility",{crit=10}).value,0.506,"Secret conversion values never enter arithmetic")
+close(calculate("agility",{meleeCrit=10}).value,0.506,"Secret conversion values never enter arithmetic")
 equal(FW:GetDerivedWeightOptions("strength",{attackPower=secret}).available,false)
 issecretvalue=nil
 
@@ -192,28 +192,28 @@ close(calculate("defense",{dodge=2,parry=3,block=5}).value,0.08,"Druids cannot p
 reset("PALADIN")
 check(FW:IsDerivedWeightStat("mana")); check(FW:IsDerivedWeightStat("dps"))
 check(FW:IsDerivedWeightStat("rangedDps")); check(FW:IsDerivedWeightStat("armor"))
-local intResult=calculate("intellect",{mana=0.1,crit=10})
+local intResult=calculate("intellect",{mana=0.1,spellCrit=10})
 close(intResult.value,1.667)
-close(calculate("mana",{intellect=intResult.value,crit=10}).value,0.1,"Intellect/Mana inverse removes spell crit")
+close(calculate("mana",{intellect=intResult.value,spellCrit=10}).value,0.1,"Intellect/Mana inverse removes spell crit")
 equal(intResult.title,"Calculate Intellect")
 check(intResult.contextText:find("Paladin",1,true))
 check(intResult.formula:find("15 x Mana",1,true))
 check(intResult.contributions==intResult.sources and #intResult.contributions>0)
 check(#intResult.assumptions>0 and #intResult.provenance>0 and #intResult.footer>0)
 for _, source in ipairs(intResult.provenance) do check(not source:find("level",1,true),"Sources do not repeat context") end
-local negativeMana=FW:GetDerivedWeightOptions("mana",{intellect=0.01,crit=10})
+local negativeMana=FW:GetDerivedWeightOptions("mana",{intellect=0.01,spellCrit=10})
 equal(negativeMana.available,false,"Inconsistent nonnegative weights cannot auto-fill negative Mana")
 check(negativeMana.value<0)
 check(negativeMana.reason:find("exceed the Intellect weight",1,true))
 check(negativeMana.formula:find("other modeled contributions",1,true))
-local intentionalNegative=calculate("mana",{intellect=-0.01,crit=10})
+local intentionalNegative=calculate("mana",{intellect=-0.01,spellCrit=10})
 check(intentionalNegative.value<0,"Explicitly negative Intellect weights retain intentional negative inference")
 reset("PALADIN")
 GetAttackPowerForStat=function(index,value) return 10+(index==4 and value*0.5 or 0) end
 GetRangedAttackPowerForStat=function(index,value) return 20+(index==4 and value*0.8 or 0) end
-local nativeInt=calculate("intellect",{mana=0.2,attackPower=2,rangedAttackPower=3,crit=10}).value
+local nativeInt=calculate("intellect",{mana=0.2,attackPower=2,rangedAttackPower=3,spellCrit=10}).value
 close(nativeInt,6.567,"Native INT/AP channels remain available for classes without a modeled AP conversion")
-close(calculate("mana",{intellect=nativeInt,attackPower=2,rangedAttackPower=3,crit=10}).value,0.2,"Mana inverse removes native melee and ranged AP as well as crit")
+close(calculate("mana",{intellect=nativeInt,attackPower=2,rangedAttackPower=3,spellCrit=10}).value,0.2,"Mana inverse removes native melee and ranged AP as well as spell crit")
 reset()
 for _, entry in ipairs({{19,1},{19.5,8},{20,15},{100,15}}) do
     stats[4]=entry[1]
@@ -223,7 +223,7 @@ end
 MANA_PER_INTELLECT=18
 close(calculate("intellect",{mana=2}).value,36,"Native Mana constant takes priority")
 stats[4]=nil
-close(calculate("intellect",{crit=10,mana=0}).value,0.167,"Unknown Mana rate does not block zero-weight Mana")
+close(calculate("intellect",{spellCrit=10,mana=0}).value,0.167,"Unknown Mana rate does not block zero-weight Mana")
 equal(FW:GetDerivedWeightOptions("intellect",{mana=1}).available,false)
 equal(FW:GetDerivedWeightOptions("mana",{intellect=1}).available,false)
 reset("WARRIOR")
@@ -328,9 +328,9 @@ GetAttackPowerForStat=function(index,value) return 100+value*(index==1 and 2 or 
 close(calculate("strength",{attackPower=1},bonuses).value,2.42,"Native AP increment M is not multiplied twice")
 GetSpellCritChanceFromStat=function(_,value) return .05+value*.001 end
 stats[4]=19.5
-local intBonuses=calculate("intellect",{mana=1,crit=2},bonuses)
+local intBonuses=calculate("intellect",{mana=1,spellCrit=2},bonuses)
 close(intBonuses.value,11.15+0.121*2,"1.21 effective Intellect crosses first20 exactly")
-close(calculate("mana",{intellect=intBonuses.value,crit=2},bonuses).value,1,"Mana inverse accounts for Kings and Divine Intellect")
+close(calculate("mana",{intellect=intBonuses.value,spellCrit=2},bonuses).value,1,"Mana inverse accounts for Kings and Divine Intellect")
 close(calculate("intellect",{mana=1},{kings=true,useTalents=false}).value,9.5,"Kings crossing first20 differs from scaling old +1 rate")
 stats[3]=19.5
 local staBonus=calculate("stamina",{health=2},{kings=true,useTalents=false}).value
@@ -408,10 +408,10 @@ equal(stored.calculationOptions.talentRanks["105332"],0,"Calculator defaults do 
 stats[4]=19.5
 GetSpellCritChanceFromStat=function(_,value) return .05+value*.001 end
 local manualBonuses={kings=true,talentRanks={["105332"]=2}}
-local manualInt=calculate("intellect",{mana=1,crit=2},manualBonuses)
+local manualInt=calculate("intellect",{mana=1,spellCrit=2},manualBonuses)
 close(manualInt.modifiers.multiplier,1.144)
 close(manualInt.value,.5+.644*15+.1144*2,"Manual rank applies once across the Intellect breakpoint")
-close(calculate("mana",{intellect=manualInt.value,crit=2},manualBonuses).value,1,"Manual ranks preserve inverse Mana equivalence")
+close(calculate("mana",{intellect=manualInt.value,spellCrit=2},manualBonuses).value,1,"Manual ranks preserve inverse Mana equivalence")
 has(manualInt.modifierLines,"Divine Intellect 2/5")
 has(manualInt.modifierLines,"Kings: +10%")
 for _, value in ipairs(manualInt.modifierLines) do
@@ -426,7 +426,7 @@ close(calculate("stamina",{health=1},{talentRanks={["104939"]=0}}).value,10,"Exp
 -- Reported level30 case: .3 total Intellect weight cannot contain a .313
 -- positive Crit share and still leave a nonnegative Mana value.
 reset("PALADIN",30)
-local reported=FW:GetDerivedWeightOptions("mana",{intellect=.3,crit=10})
+local reported=FW:GetDerivedWeightOptions("mana",{intellect=.3,spellCrit=10})
 equal(reported.available,false)
 close(reported.value,-.00086666666666667)
 close(reported.manaBreakdown.intellectWeight,.3)
@@ -437,22 +437,22 @@ equal(reported.contributions[1].operation,"add")
 close(reported.contributions[1].displayRate,1)
 close(reported.contributions[1].displayValue,.3)
 local critShare=reported.contributions[#reported.contributions]
-equal(critShare.key,"crit"); equal(critShare.operation,"subtract")
+equal(critShare.key,"spellCrit"); equal(critShare.operation,"subtract")
 check(critShare.rate<0 and critShare.value<0,"Signed inverse coefficients remain mathematically correct internally")
 close(critShare.displayRate,.0313)
 close(critShare.displayValue,.313,"UI shows the positive Crit share in Intellect units")
 check(reported.reason:find("0.313",1,true) and reported.reason:find("0.3",1,true))
-local negativeCrit=calculate("mana",{intellect=.3,crit=-10})
+local negativeCrit=calculate("mana",{intellect=.3,spellCrit=-10})
 local negativeCritShare=negativeCrit.contributions[#negativeCrit.contributions]
 equal(negativeCritShare.operation,"subtract")
 check(negativeCritShare.displayValue<0,"Subtracting an intentionally negative source weight must not become subtracting its absolute value")
-local almostZero=calculate("mana",{intellect=.313+1e-15,crit=10})
+local almostZero=calculate("mana",{intellect=.313+1e-15,spellCrit=10})
 equal(almostZero.value,0,"Cancellation noise is clamped relative to the source values")
 local tiny=calculate("mana",{intellect=1e-20})
 check(tiny.value>0,"An absolute epsilon must not erase a small but genuine weight")
 close(tiny.value/1e-20,1/15)
-local scaledInt=calculate("intellect",{mana=2e-12,crit=3e-12}).value
-local scaledMana=calculate("mana",{intellect=scaledInt,crit=3e-12}).value
+local scaledInt=calculate("intellect",{mana=2e-12,spellCrit=3e-12}).value
+local scaledMana=calculate("mana",{intellect=scaledInt,spellCrit=3e-12}).value
 close(scaledMana/1e-12,2,"Reciprocal conversion still works for profiles scaled down by1e-12")
 
 -- Passive attribute conversions are separate from percentage stat bonuses.
@@ -631,8 +631,43 @@ close(calculate("spirit",{mp5=1},{castingShare=0}).value,.625,"Unreadable zero-w
 equal(FW:GetDerivedWeightOptions("spirit",{spellDamage=1}).available,false)
 close(calculate("spirit",{spellDamage=1},{talentRanks={["105853"]=3}}).value,.05)
 
+-- Melee and spell critical-strike weights are independent. Attribute
+-- conversions expose the matching canonical key for UI source highlighting.
+reset("PALADIN",60)
+local splitWeights={meleeCrit=2,spellCrit=7}
+local fallbackAgility=calculate("agility",splitWeights)
+local fallbackIntellect=calculate("intellect",splitWeights)
+close(fallbackAgility.value,.0506*2,"Fallback Agility consumes only Melee Crit")
+close(fallbackIntellect.value,.0167*7,"Fallback Intellect consumes only Spell Crit")
+equal(contribution(fallbackAgility,"meleeCrit").weight,2)
+equal(contribution(fallbackAgility,"spellCrit"),nil)
+equal(contribution(fallbackIntellect,"spellCrit").weight,7)
+equal(contribution(fallbackIntellect,"meleeCrit"),nil)
+close(calculate("agility",{spellCrit=1000}).value,0,"Spell Crit never prices Agility")
+close(calculate("intellect",{meleeCrit=1000}).value,0,"Melee Crit never prices Intellect")
+close(calculate("agility",{crit=1000}).value,0,"Calculator does not guess a legacy combined Crit weight")
+close(calculate("intellect",{crit=1000}).value,0,"Legacy normalization remains the profile layer's responsibility")
+GetCritChanceFromStat=function(index,value) equal(index,2); return .05+value*.0004 end
+GetSpellCritChanceFromStat=function(index,value) equal(index,4); return .08+value*.0002 end
+local nativeAgility=calculate("agility",splitWeights,{kings=true})
+close(nativeAgility.value,.04*1.1*2,"Native Agility rate uses Melee Crit with Kings once")
+equal(contribution(nativeAgility,"meleeCrit").key,"meleeCrit")
+equal(contribution(nativeAgility,"spellCrit"),nil)
+local splitOptions={kings=true,talentRanks={["105332"]=5}}
+local nativeIntellect=calculate("intellect",{mana=.3,meleeCrit=1000,spellCrit=7},splitOptions)
+close(nativeIntellect.value,1.21*(15*.3+.02*7),"Native Intellect uses Spell Crit with Kings and Divine Intellect once")
+equal(contribution(nativeIntellect,"meleeCrit"),nil)
+close(contribution(nativeIntellect,"spellCrit").rate,.02*1.21)
+local nativeMana=calculate("mana",{intellect=nativeIntellect.value,meleeCrit=1e9,spellCrit=7},splitOptions)
+close(nativeMana.value,.3,"Mana inverse removes Spell Crit and ignores even a large Melee Crit weight")
+equal(contribution(nativeMana,"meleeCrit"),nil)
+equal(contribution(nativeMana,"spellCrit").operation,"subtract")
+close(contribution(nativeMana,"spellCrit").displayValue,.02*1.21*7,"Inverse tooltip highlights the positive Spell Crit share")
+local nativeNoSpell=calculate("mana",{intellect=15*.3*1.21,meleeCrit=1e9},splitOptions)
+close(nativeNoSpell.value,.3,"Melee Crit alone creates no Mana deduction")
+
 reset()
-local draft={attackPower=0.2,crit=10,mp5=2}
+local draft={attackPower=0.2,meleeCrit=10,spellCrit=3,mp5=2}
 calculate("strength",draft)
 equal(draft.strength,nil,"Calculating never mutates draft source weights")
 equal(draft.attackPower,0.2)

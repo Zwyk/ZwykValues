@@ -1,8 +1,8 @@
-# ZwykValues 0.1.26
+# ZwykValues 0.1.27
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
-Version 0.1.26 includes passive stat-conversion talents in calculated weights, including Paladin Champion of the Light and Hunter Careful Aim. Their editable rank sliders default to the active spec, and the reverse Mana/MP5 calculations remove the same modeled contributions. Calculation tooltips retain the compact Modifiers section.
+Version 0.1.27 separates Melee and Spell critical-strike weights. Generic item crit contributes to both; scoped effects contribute only to their matching channel. Agility calculations use Melee Crit, while Intellect and the reverse Mana calculation use Spell Crit. Existing generic Crit weights split evenly to preserve generic-item totals.
 
 ## Installation
 
@@ -35,7 +35,7 @@ Each score is a linear sum:
 
 `score = sum(item_stat_amount * profile_stat_weight)`
 
-For example, 20 Strength at weight 2 and 1% Crit at weight 10 give 50 points in a percentage profile. Stamina is not converted to health, Strength is not converted to attack power, and Agility is not converted to crit: enter weights that already account for their value for your character.
+For example, 20 Strength at weight 2 and 1% generic Crit at Melee weight 4 plus Spell weight 6 give 50 points. Stamina is not converted to health, Strength is not converted to attack power, and Agility is not converted to crit during item scoring: enter weights that already account for their value for your character.
 
 Profiles are account-wide, including their active status, colors, icons and item filters. All changes and the score cache are stored by WoW in the addon's `SavedVariables` on logout or `/reload`.
 
@@ -47,7 +47,9 @@ Copies and full profile exports preserve these choices. Bare weights JSON and ol
 
 ## Stat units and JSON
 
-The supplied Sixty Upgrades keys are preserved. **Import** accepts a bare JSON object of stat weights. Missing recognized keys become zero. Unknown keys and invalid numeric values are rejected with a message so typos cannot silently change a profile.
+**Import** accepts a bare JSON object of stat weights, including legacy Sixty Upgrades keys. Missing recognized keys become zero. Unknown keys and invalid numeric values are rejected with a message so typos cannot silently change a profile. The two crit weights use `meleeCrit` and `spellCrit`.
+
+Old profiles and imports with only the legacy `crit` key split it evenly: `crit: 10` becomes `meleeCrit: 5` and `spellCrit: 5`. This preserves the total value of generic crit; the old single value cannot identify your intended melee/spell balance, so review the two weights for your build. Migration runs once, retains no hidden third Crit weight, and clears obsolete score/item caches. Explicit new values remain unchanged on reload. Inputs mixing legacy `crit` with either new crit key are rejected; use the explicit pair when choosing a new balance. Full and bare exports contain the two new keys.
 
 **Export weights** produces the bare stat object. **Export profile** also preserves the profile name, color, icon, item filters, upgrade activation, comparison target, calculator ratios and manual talent ranks. These metadata are lost when exporting only bare weights.
 
@@ -55,7 +57,7 @@ Secondary weights always use percentages; there is no rating mode:
 
 | Key or group | Unit |
 | --- | --- |
-| `hit`, `crit`, `haste`, `expertise`, `dodge`, `parry`, `block` | Weight per percentage point; 1% means an amount of 1 |
+| `hit`, `meleeCrit`, `spellCrit`, `haste`, `expertise`, `dodge`, `parry`, `block` | Weight per percentage point; 1% means an amount of 1 |
 | `defense` | Weight per defense skill point, when explicitly available |
 | Primary stats, AP, spell/healing power, armor, resistances, health, mana | Weight per stat point |
 | `hp5`, `mp5` | Weight per regeneration point per 5 seconds |
@@ -64,11 +66,11 @@ Secondary weights always use percentages; there is no rating mode:
 | `weaponDamage` | Weight per explicitly added flat weapon damage |
 | `speed`, `rangedSpeed` | Weight per weapon swing second |
 
-Merged melee/ranged/spell hit and crit aliases are counted once. The reader uses explicit tooltip percentages and keeps native API ratings separately for diagnostics. It does not apply an assumed rating conversion. If a needed percentage is unavailable, the item still shows the subtotal from known values, accompanied by a partial-data warning. Unavailable amounts contribute zero to that subtotal; an actually absent stat also contributes zero. Check the diagnostics before trusting a partial comparison.
+Melee/ranged/spell hit aliases remain merged. Crit is separated: generic critical-strike effects add their percentage to both Melee and Spell Crit; spell-only effects add only Spell Crit, and melee/ranged/attack-only effects add only Melee Crit. The Melee label therefore includes ranged attacks. Generic and scoped tooltip effects add together, even when their amounts match. Within the attack channel, generic and all-attack bonuses are added to the larger of the separate melee/ranged totals: a matching 1% melee and 1% ranged bonus counts as one 1% attack bonus. Duplicate native API aliases are counted once within each channel. The reader uses explicit tooltip percentages and keeps native API ratings separately for diagnostics. It does not apply an assumed rating conversion. If a needed percentage is unavailable, the item still shows the subtotal from known values, accompanied by a partial-data warning. A readable enchant cannot hide an unreadable base bonus, and an explicit rating effect cannot be completed by another effect's known percentage. Unavailable amounts contribute zero to that subtotal; an actually absent stat also contributes zero. Check the diagnostics before trusting a partial comparison.
 
-The editor labels each secondary weight with **%**, or **skill** for defense. A crit weight of 10 means **10 points per 1%**: 0.5% contributes 5. For Manascale Treads, 157 armor at 0.05, 7 Strength at 0.2 and 7 Intellect at 0.3 contribute 11.35, giving **16.35** with its crit chance. Version 0.1.18 switches saved rating profiles and imported legacy profiles to percentages, keeping numeric weights and recalculating old totals. Full exports retain `secondaryUnit: "percent"` for compatibility.
+The editor labels each secondary weight with **%**, or **skill** for defense. At Melee Crit weight 4 and Spell Crit weight 6, a generic 0.5% gives 5 points, a melee-only 0.5% gives 2, and a spell-only 0.5% gives 3. For Manascale Treads, 157 armor at 0.05, 7 Strength at 0.2 and 7 Intellect at 0.3 contribute 11.35, giving **16.35** with its generic crit chance at those weights. Version 0.1.18 switches saved rating profiles and imported legacy profiles to percentages, keeping their numeric weights at that upgrade and recalculating old totals. Full exports retain `secondaryUnit: "percent"` for compatibility.
 
-Version 0.1.17 also fixes static wording such as `chance to critically hit with spells`: it counts as critical strike chance and does not add hit chance. Previously parsed item records refresh automatically.
+Static wording such as `chance to critically hit with spells` counts as Spell Crit and does not add Melee Crit or hit chance. Previously parsed item records refresh automatically.
 
 `weaponDamage` is the explicit flat bonus (for example, `+1 Weapon Damage`), not the weapon's average base damage. To value average base damage, use half of the intended average-damage weight for both `lowDamage` and `highDamage`. JSON key compatibility is preserved, but all Sixty Upgrades field semantics have not been independently verified; check the units above when importing existing profiles.
 
@@ -82,9 +84,9 @@ Version 0.1.16 reads elemental wand damage ranges and the client's school-damage
 
 A small gear immediately left of a supported value box opens its calculation or fills its draft weight. Hover the gear to see a wider, structured tooltip with the formula, source weights, result and selected modifiers. The source stat fields referenced by that calculation are highlighted, including inputs whose current weight is zero. Highlights clear when the hover ends, another calculation is hovered, or the profile/editor changes; they do not edit values or move the scroll position. These buttons calculate **weights**; they do not add derived stats to items or run during item hover. Review the result and click **Apply weights** to save it. Recalculate after a level, form, talent or planned-buff change.
 
-Supported relationships include Strength from attack power and shield block value, Agility from attack power/armor/critical strike/dodge, Stamina from Health, Intellect from Mana/spell critical strike/class conversion talents, Spirit from MP5 and class conversion talents, and the reverse Health/Mana/MP5 conversions. Mana is a separate resource weight, distinct from MP5. Old profiles start with a zero Mana weight. Native and English/French flat-Mana item stats and enchants are recognized; restoring Mana is not treated as a permanent flat-Mana bonus.
+Supported relationships include Strength from attack power and shield block value, Agility from attack power/armor/Melee Crit/dodge, Stamina from Health, Intellect from Mana/Spell Crit/class conversion talents, Spirit from MP5 and class conversion talents, and the reverse Health/Mana/MP5 conversions. Agility never uses the Spell Crit weight, and Intellect/Mana never use the Melee Crit weight. Mana is a separate resource weight, distinct from MP5. Old profiles start with a zero Mana weight. Native and English/French flat-Mana item stats and enchants are recognized; restoring Mana is not treated as a permanent flat-Mana bonus.
 
-Mana and Intellect calculations use the next item-stat point and account for the first-20-Intellect breakpoint. The reverse Mana calculation subtracts Intellect's other modeled contributions before dividing by its Mana gain. The Mana tooltip shows an Intellect breakdown with positive shares labeled as deductions, including Crit and the outputs of the selected conversion talents. If those shares exceed a nonnegative Intellect weight, the result is unavailable: adjust the source weights or selected talent ranks before applying it. For example, an Intellect weight of 0.3 cannot include a Crit contribution worth 0.313 and still leave a nonnegative Mana value. Intentionally negative Intellect weights and manually entered negative Mana weights remain supported; tiny floating-point remainders are treated as zero.
+Mana and Intellect calculations use the next item-stat point and account for the first-20-Intellect breakpoint. The reverse Mana calculation subtracts Intellect's other modeled contributions before dividing by its Mana gain. The Mana tooltip shows an Intellect breakdown with positive shares labeled as deductions, including Spell Crit and the outputs of the selected conversion talents. If those shares exceed a nonnegative Intellect weight, the result is unavailable: adjust the source weights or selected talent ranks before applying it. For example, an Intellect weight of 0.3 cannot include a Spell Crit contribution worth 0.313 and still leave a nonnegative Mana value. Intentionally negative Intellect weights and manually entered negative Mana weights remain supported; tiny floating-point remainders are treated as zero.
 
 Relevant calculation dialogs offer **Blessing of Kings (+10%)** and a **rank slider for each supported talent**. Sliders default to the current active spec and range from zero to that talent's maximum rank: Divine Strength and Divine Intellect use 0–5, each adding 2% per point. Moving a slider creates a manual override; untouched current ranks are never saved as fixed overrides. **Use current talents** removes the displayed overrides and restores automatic current-rank defaults. Manual ranks can also be chosen when the native talent rank is unreadable. Existing profiles that explicitly disabled talent bonuses retain zero-rank behavior until you choose a rank or restore current talents.
 

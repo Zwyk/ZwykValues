@@ -252,7 +252,13 @@ local strength, hit = weightBox("Strength"), weightBox("Hit (%)")
 local profile = FW:GetProfiles()[1]
 userText(strength, "2.5")
 userText(hit, "-3")
-local critical = byText("Critical strike (%)", "FontString")
+local critical = byText("Spell critical strike (%)", "FontString")
+do
+    local meleeCritBox, spellCritBox = weightBox("Melee critical strike (%)"), weightBox("Spell critical strike (%)")
+    userText(meleeCritBox, "2")
+    userText(spellCritBox, "7")
+    check(meleeCritBox ~= spellCritBox, "melee and spell critical strike have separate inputs")
+end
 local defense = byText("Defense (skill)", "FontString")
 for _, text in ipairs({ "Haste (%)", "Expertise (%)", "Dodge (%)", "Parry (%)", "Block chance (%)" }) do
     check(byText(text, "FontString"), "percent weight label specifies its unit: " .. text)
@@ -264,7 +270,8 @@ local unitHelp = find(function(control) return control.kind == "FontString" and 
 check(unitHelp:GetText():find("1% = 1", 1, true), "editor explains that secondary weights always use percentage points")
 profile.secondaryUnit = "rating" -- Simulate a malformed legacy in-memory profile.
 FW:RefreshUI()
-equal(critical:GetText(), "Critical strike (%)", "crit label always uses percentage points")
+equal(critical:GetText(), "Spell critical strike (%)", "crit label always uses percentage points")
+equal(byText("Melee critical strike (%)", "FontString"):GetText(), "Melee critical strike (%)", "melee critical strike label uses percentage points")
 equal(defense:GetText(), "Defense (skill)", "defense label always uses defense skill")
 equal(hit.parent.children[1]:GetText(), "Hit (%)", "hit label always uses percentage points")
 profile.secondaryUnit = "percent"
@@ -272,6 +279,8 @@ equal(strength:GetText(), "2.5", "refresh preserves unsaved primary weights")
 equal(hit:GetText(), "-3", "refresh preserves unsaved secondary weights")
 equal(profile.weights.hit, 0, "refresh does not apply draft weights")
 equal(profile.weights.strength, 0, "weights remain drafts before applying")
+equal(profile.weights.meleeCrit, 0, "melee crit stays a draft before Apply")
+equal(profile.weights.spellCrit, 0, "spell crit stays a draft before Apply")
 click("Item filters")
 local filterScroll = ZwykValuesItemFiltersScroll
 local filterDialog = filterScroll.parent.parent
@@ -318,6 +327,9 @@ equal(hit:GetText(), "-3", "cache refresh preserves every unsaved weight")
 click("Apply weights")
 equal(profile.weights.strength, 2.5, "apply commits decimal weights")
 equal(profile.weights.hit, -3, "apply commits negative weights")
+equal(profile.weights.meleeCrit, 2, "Apply saves the melee critical-strike weight independently")
+equal(profile.weights.spellCrit, 7, "Apply saves the spell critical-strike weight independently")
+equal(profile.weights.crit, nil, "the editor saves canonical crit channels without the old combined key")
 userText(strength, "invalid")
 click("Apply weights")
 equal(profile.weights.strength, 2.5, "invalid weight input leaves saved profile intact")
@@ -739,8 +751,27 @@ equal(calculatorWidths[#calculatorWidths][2], false, "width cleanup releases for
 userText(attackBox, "0")
 gear("strength"):Fire("OnEnter")
 check(sourceHighlighted("Attack power"), "zero-weight source inputs are still highlighted")
+do
+    local meleeCritBox, spellCritBox = weightBox("Melee critical strike (%)"), weightBox("Spell critical strike (%)")
+    local function contribution(label)
+        for _, columns in ipairs(calculatorDoubleLines) do if columns.left == label then return columns.right end end
+    end
+    userText(meleeCritBox, "2")
+    userText(spellCritBox, "7")
+    gear("agility"):Fire("OnEnter")
+    check(sourceHighlighted("Melee critical strike (%)") and not sourceHighlighted("Spell critical strike (%)"), "Agility highlights only the melee critical-strike input")
+    check(contribution("Melee critical strike") and contribution("Melee critical strike"):find("x 2", 1, true), "Agility calculation uses the melee critical-strike draft weight")
+    equal(contribution("Spell critical strike"), nil, "Agility does not calculate with the spell critical-strike weight")
+    gear("intellect"):Fire("OnEnter")
+    check(sourceHighlighted("Spell critical strike (%)") and not sourceHighlighted("Melee critical strike (%)"), "Intellect highlights only the spell critical-strike input")
+    check(contribution("Spell critical strike") and contribution("Spell critical strike"):find("x 7", 1, true), "Intellect calculation uses the spell critical-strike draft weight")
+    equal(contribution("Melee critical strike"), nil, "Intellect does not calculate with the melee critical-strike weight")
+    userText(meleeCritBox, "0")
+    userText(spellCritBox, "0")
+end
 gear("mana"):Fire("OnEnter")
-check(sourceHighlighted("Intellect") and sourceHighlighted("Critical strike (%)"), "Mana hover highlights each modeled inverse input")
+check(sourceHighlighted("Intellect") and sourceHighlighted("Spell critical strike (%)"), "Mana hover highlights each modeled inverse input")
+check(not sourceHighlighted("Melee critical strike (%)"), "Mana inverse calculation leaves melee critical strike unhighlighted")
 check(not sourceHighlighted("Attack power") and not sourceHighlighted("Block value"), "switching cogs replaces earlier highlights")
 local actualUnitClass = UnitClass
 UnitClass = function() return "Rogue", "ROGUE" end
@@ -841,12 +872,12 @@ calculationDialog.use:Fire("OnClick")
 equal(tonumber(weightBox("Mana"):GetText()), 3, "Mana gear fills the inverse Intellect conversion")
 C_Traits.GetNodeInfo = actualTraitInfo
 userText(weightBox("Intellect"), "0")
-userText(weightBox("Critical strike (%)"), "10")
+userText(weightBox("Spell critical strike (%)"), "10")
 gear("mana"):Fire("OnEnter")
 check(table.concat(calculatorLines, "\n"):find("Intellect breakdown", 1, true), "Mana explains its inputs in Intellect units")
 local critDeduction, intellectInput
 for _, columns in ipairs(calculatorDoubleLines) do
-    if columns.left == "Less Critical strike" then critDeduction = columns.right end
+    if columns.left == "Less Spell critical strike" then critDeduction = columns.right end
     if columns.left == "Intellect" then intellectInput = columns.right end
 end
 check(critDeduction and not critDeduction:match("^-"), "Mana presents Crit as a deduction with a positive rate")
@@ -857,7 +888,7 @@ check(calculationDialog.details:GetText():find("exceed the Intellect weight", 1,
 check(not calculationDialog.details:GetText():find("Data source", 1, true) and not calculationDialog.details:GetText():find("Assumptions", 1, true), "calculation prompts omit sources and general assumptions too")
 calculationDialog.cancel:Fire("OnClick")
 userText(weightBox("Intellect"), "45")
-userText(weightBox("Critical strike (%)"), "0")
+userText(weightBox("Spell critical strike (%)"), "0")
 local spirit, mp5 = weightBox("Spirit"), weightBox("Mana per 5 seconds")
 userText(mp5, "4")
 gear("spirit"):Fire("OnClick")
@@ -1200,6 +1231,9 @@ local dialogText = ZwykValuesJSONScroll.scrollChild
 local exported = assert(FW.JSON.Decode(dialogText:GetText()))
 equal(exported.name, copied.name, "export is the selected full profile")
 equal(exported.weights.strength, 4, "export carries weights")
+equal(exported.weights.meleeCrit, 2, "profile export retains the independent melee crit weight")
+equal(exported.weights.spellCrit, 7, "profile export retains the independent spell crit weight")
+equal(exported.weights.crit, nil, "profile export omits the legacy combined crit key")
 equal(exported.color.b, copied.color.b, "export carries color")
 equal(exported.secondaryUnit, copied.secondaryUnit, "export carries stat units")
 equal(exported.itemFilters.weapons["0"], true, "profile export carries its item filters")
@@ -1268,7 +1302,7 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     within(byText("Apply weights", "Button"), FW.UI, "apply button fits editor")
     within(byText("Clear cache", "Button"), FW.UI, "cache button fits footer")
     check(ZwykValuesStatsScroll:GetHeight() >= 190, "resized editor keeps useful visible weight area")
-    for _, control in ipairs({ critical, defense }) do
+    for _, control in ipairs({ critical, byText("Melee critical strike (%)", "FontString"), defense }) do
         check(#control:GetText() * control.fontSize * .56 <= control:GetWidth(), "secondary units fit beside their weights at minimum width")
         local box
         for _, child in ipairs(control.parent.children) do if child.kind == "EditBox" then box = child end end

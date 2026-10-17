@@ -1437,7 +1437,8 @@ end
 
 local statHints = {
     hit = "The unified hit stat. Weight per 1 percentage point (1% = 1).",
-    crit = "The unified critical strike stat. Weight per 1 percentage point (1% = 1).",
+    meleeCrit = "Critical strike chance for physical attacks, including ranged attacks. Weight per 1 percentage point (1% = 1).",
+    spellCrit = "Critical strike chance for spells. Weight per 1 percentage point (1% = 1).",
     haste = "Weight per 1 percentage point (1% = 1).",
     expertise = "Weight per 1 percentage point of reduced dodge/parry chance (1% = 1).",
     dodge = "Weight per 1 percentage point of dodge chance (1% = 1).",

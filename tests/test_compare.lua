@@ -56,7 +56,7 @@ result=FW:CompareItem("candidate",{id="test"})
 assert(result.score==90 and result.hasIssues and result.comparisons[1].hasIssues)
 assert(result.comparisons[1].baseline==100 and result.comparisons[1].delta==-10)
 assert(not result.comparisons[2].hasIssues)
-records.ringA.partial=false; records.ringB.scoreIssues={test={missingStats={crit=true}}}
+records.ringA.partial=false; records.ringB.scoreIssues={test={missingStats={spellCrit=true}}}
 result=FW:CompareItem("candidate",{id="test"})
 assert(result.hasIssues and result.comparisons[2].hasIssues and result.comparisons[2].delta==10)
 records.ringB.scoreIssues=nil; records.candidate.partial=true

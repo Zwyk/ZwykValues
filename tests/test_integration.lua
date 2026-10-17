@@ -2,30 +2,39 @@
 -- pipeline. These mock APIs verify our contracts, not live client behavior.
 local FW = {}
 local itemDB={
-    ["item:100:0:0:0:0:0:0:0:60"]={name="New helmet",strength=10,crit=1,equipLoc="INVTYPE_HEAD"},
-    ["item:101:0:0:0:0:0:0:0:60"]={name="Old helmet",strength=8,crit=1,equipLoc="INVTYPE_HEAD"},
-    ["item:100:0:0:0:0:0:-7:123:60"]={name="Variant helmet",strength=15,crit=1,equipLoc="INVTYPE_HEAD"},
-    ["item:102:0:0:0:0:0:0:0:60"]={name="Scanner helmet",strength=4,crit=1,equipLoc="INVTYPE_HEAD"},
-    ["item:103:0:0:0:0:0:0:0:60"]={name="Partial helmet",strength=12,crit=1,equipLoc="INVTYPE_HEAD",unknown=3},
-    ["item:104:8481:0:0:0:0:0:0:60"]={name="Enchanted new helmet",strength=10,crit=1,equipLoc="INVTYPE_HEAD",enchant=5},
-    ["item:104:0:0:0:0:0:0:0:60"]={name="Base new helmet",strength=10,crit=1,equipLoc="INVTYPE_HEAD"},
-    ["item:105:8481:0:0:0:0:0:0:60"]={name="Enchanted old helmet",strength=8,crit=1,equipLoc="INVTYPE_HEAD",enchant=10},
-    ["item:105:0:0:0:0:0:0:0:60"]={name="Base old helmet",strength=8,crit=1,equipLoc="INVTYPE_HEAD"},
-    ["item:106:0:0:0:0:0:0:0:60"]={name="Cloth helmet",strength=20,crit=1,equipLoc="INVTYPE_HEAD",subclassID=1},
-    ["item:107:0:0:0:0:0:0:0:60"]={name="Warrior helmet",strength=20,crit=1,equipLoc="INVTYPE_HEAD",classes="Warrior"},
-    ["item:108:0:0:0:0:0:0:0:60"]={name="Shared helmet",strength=20,crit=1,equipLoc="INVTYPE_HEAD",classes="Warrior, Paladin"},
-    ["item:109:0:0:0:0:0:0:0:60"]={name="Strength potion",strength=99,crit=1,equipLoc="",classID=0,unknown=3},
-    ["item:110:0:0:0:0:0:0:0:60"]={name="Quest item",strength=99,crit=1,equipLoc="",classID=12},
-    ["item:111:0:0:0:0:0:0:0:60"]={name="Bag",strength=99,crit=1,equipLoc="INVTYPE_BAG",classID=1},
+    ["item:100:0:0:0:0:0:0:0:60"]={name="New helmet",strength=10,genericCrit=1,equipLoc="INVTYPE_HEAD"},
+    ["item:101:0:0:0:0:0:0:0:60"]={name="Old helmet",strength=8,genericCrit=1,equipLoc="INVTYPE_HEAD"},
+    ["item:100:0:0:0:0:0:-7:123:60"]={name="Variant helmet",strength=15,genericCrit=1,equipLoc="INVTYPE_HEAD"},
+    ["item:102:0:0:0:0:0:0:0:60"]={name="Scanner helmet",strength=4,genericCrit=1,equipLoc="INVTYPE_HEAD"},
+    ["item:103:0:0:0:0:0:0:0:60"]={name="Partial helmet",strength=12,genericCrit=1,equipLoc="INVTYPE_HEAD",unknown=3},
+    ["item:104:8481:0:0:0:0:0:0:60"]={name="Enchanted new helmet",strength=10,genericCrit=1,equipLoc="INVTYPE_HEAD",enchant=5},
+    ["item:104:0:0:0:0:0:0:0:60"]={name="Base new helmet",strength=10,genericCrit=1,equipLoc="INVTYPE_HEAD"},
+    ["item:105:8481:0:0:0:0:0:0:60"]={name="Enchanted old helmet",strength=8,genericCrit=1,equipLoc="INVTYPE_HEAD",enchant=10},
+    ["item:105:0:0:0:0:0:0:0:60"]={name="Base old helmet",strength=8,genericCrit=1,equipLoc="INVTYPE_HEAD"},
+    ["item:106:0:0:0:0:0:0:0:60"]={name="Cloth helmet",strength=20,genericCrit=1,equipLoc="INVTYPE_HEAD",subclassID=1},
+    ["item:107:0:0:0:0:0:0:0:60"]={name="Warrior helmet",strength=20,genericCrit=1,equipLoc="INVTYPE_HEAD",classes="Warrior"},
+    ["item:108:0:0:0:0:0:0:0:60"]={name="Shared helmet",strength=20,genericCrit=1,equipLoc="INVTYPE_HEAD",classes="Warrior, Paladin"},
+    ["item:109:0:0:0:0:0:0:0:60"]={name="Strength potion",strength=99,genericCrit=1,equipLoc="",classID=0,unknown=3},
+    ["item:110:0:0:0:0:0:0:0:60"]={name="Quest item",strength=99,genericCrit=1,equipLoc="",classID=12},
+    ["item:111:0:0:0:0:0:0:0:60"]={name="Bag",strength=99,genericCrit=1,equipLoc="INVTYPE_BAG",classID=1},
     ["item:112:0:0:0:0:0:0:0:60"]={name="New arrows",ammoDps=7.5,equipLoc="INVTYPE_AMMO",classID=6,subclassID=2},
     ["item:113:0:0:0:0:0:0:0:60"]={name="Equipped arrows",ammoDps=4,equipLoc="INVTYPE_AMMO",classID=6,subclassID=2},
-    ["item:114:0:0:0:0:0:0:0:60"]={name="Equipped bow",strength=99,crit=1,equipLoc="INVTYPE_RANGED",classID=2,subclassID=2},
-    ["item:115:8481:0:0:0:0:0:0:60"]={name="Enchanted Use helmet",strength=0,crit=0,spellPower=20,enchant=5,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 120 for 10 sec. (2 Min Cooldown)"},
-    ["item:115:0:0:0:0:0:0:0:60"]={name="Base Use helmet",strength=0,crit=0,spellPower=20,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 120 for 10 sec. (2 Min Cooldown)"},
-    ["item:116:8481:0:0:0:0:0:0:60"]={name="Equipped enchanted Use helmet",strength=0,crit=0,spellPower=18,enchant=10,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 60 for 10 sec. (2 Min Cooldown)"},
-    ["item:116:0:0:0:0:0:0:0:60"]={name="Equipped Base Use helmet",strength=0,crit=0,spellPower=18,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 60 for 10 sec. (2 Min Cooldown)"},
-    ["item:117:0:0:0:0:0:0:0:60"]={name="Passive spell-power helmet",strength=0,crit=0,spellPower=23,equipLoc="INVTYPE_HEAD"},
-    ["item:118:0:0:0:0:0:0:0:60"]={name="Use helmet awaiting cooldown",strength=0,crit=0,spellPower=15,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 120 for 10 sec."},
+    ["item:114:0:0:0:0:0:0:0:60"]={name="Equipped bow",strength=99,genericCrit=1,equipLoc="INVTYPE_RANGED",classID=2,subclassID=2},
+    ["item:115:8481:0:0:0:0:0:0:60"]={name="Enchanted Use helmet",strength=0,genericCrit=0,spellPower=20,enchant=5,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 120 for 10 sec. (2 Min Cooldown)"},
+    ["item:115:0:0:0:0:0:0:0:60"]={name="Base Use helmet",strength=0,genericCrit=0,spellPower=20,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 120 for 10 sec. (2 Min Cooldown)"},
+    ["item:116:8481:0:0:0:0:0:0:60"]={name="Equipped enchanted Use helmet",strength=0,genericCrit=0,spellPower=18,enchant=10,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 60 for 10 sec. (2 Min Cooldown)"},
+    ["item:116:0:0:0:0:0:0:0:60"]={name="Equipped Base Use helmet",strength=0,genericCrit=0,spellPower=18,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 60 for 10 sec. (2 Min Cooldown)"},
+    ["item:117:0:0:0:0:0:0:0:60"]={name="Passive spell-power helmet",strength=0,genericCrit=0,spellPower=23,equipLoc="INVTYPE_HEAD"},
+    ["item:118:0:0:0:0:0:0:0:60"]={name="Use helmet awaiting cooldown",strength=0,genericCrit=0,spellPower=15,equipLoc="INVTYPE_HEAD",use="Use: Increases spell power by 120 for 10 sec."},
+    ["item:119:8481:0:0:0:0:0:0:60"]={name="Enchanted mixed Crit helmet",strength=0,genericCrit=1,meleeCrit=2,spellCrit=1,enchant=5,equipLoc="INVTYPE_HEAD",use="Use: Increases your chance to get a critical strike by 10% for 6 sec. (2 Min Cooldown)"},
+    ["item:119:0:0:0:0:0:0:0:60"]={name="Base mixed Crit helmet",strength=0,genericCrit=1,meleeCrit=2,spellCrit=1,equipLoc="INVTYPE_HEAD",use="Use: Increases your chance to get a critical strike by 10% for 6 sec. (2 Min Cooldown)"},
+    ["item:120:8481:0:0:0:0:0:0:60"]={name="Equipped enchanted spell Crit helmet",strength=0,genericCrit=1,spellCrit=2,enchant=1,equipLoc="INVTYPE_HEAD",use="Use: Improves your chance to get a critical strike with spells by 10% for 6 sec. (2 Min Cooldown)"},
+    ["item:120:0:0:0:0:0:0:0:60"]={name="Equipped Base spell Crit helmet",strength=0,genericCrit=1,spellCrit=2,equipLoc="INVTYPE_HEAD",use="Use: Improves your chance to get a critical strike with spells by 10% for 6 sec. (2 Min Cooldown)"},
+    ["item:121:8481:0:0:0:0:0:0:60"]={name="Unresolved spell Crit enchant helmet",strength=0,spellCritRating=10,critEnchant="Enchanted: Spell Critical Strike +1%",equipLoc="INVTYPE_HEAD"},
+    ["item:121:0:0:0:0:0:0:0:60"]={name="Unresolved Base spell Crit helmet",strength=0,spellCritRating=10,equipLoc="INVTYPE_HEAD"},
+    ["item:122:0:0:0:0:0:0:0:60"]={name="Known spell and unresolved melee Crit helmet",strength=0,critRating=10,spellCrit=1,equipLoc="INVTYPE_HEAD"},
+    ["item:123:8481:0:0:0:0:0:0:60"]={name="Known Crit with unresolved spell enchant helmet",strength=0,genericCrit=1,critEnchant="Enchanted: Spell Critical Strike Rating +6",equipLoc="INVTYPE_HEAD"},
+    ["item:123:0:0:0:0:0:0:0:60"]={name="Known Crit Base helmet",strength=0,genericCrit=1,equipLoc="INVTYPE_HEAD"},
 }
 local candidate="item:100:0:0:0:0:0:0:0:60"
 local baseline="item:101:0:0:0:0:0:0:0:60"
@@ -42,11 +51,14 @@ end
 local function sourceLines(link)
     local item=definition(link)
     if item.ammoDps then return {item.name,"Adds " .. item.ammoDps .. " damage per second"} end
-    local lines = {item.name,"+" .. item.strength .. " Strength",
-        "Equip: Increases your chance to get a critical strike by " .. item.crit .. "%."}
+    local lines = {item.name,"+" .. item.strength .. " Strength"}
+    if item.genericCrit ~= nil then lines[#lines+1]="Equip: Increases your chance to get a critical strike by " .. item.genericCrit .. "%." end
+    if item.meleeCrit then lines[#lines+1]="Equip: Improves your chance to get a critical strike with attacks by " .. item.meleeCrit .. "%." end
+    if item.spellCrit then lines[#lines+1]="Equip: Improves your chance to get a critical strike with spells by " .. item.spellCrit .. "%." end
     if item.spellPower then lines[#lines+1]="Equip: Increases damage and healing done by magical spells and effects by up to " .. item.spellPower .. "." end
     if item.unknown then lines[#lines+1]="+" .. item.unknown .. " Mystic Focus" end
     if item.enchant then lines[#lines+1]="Enchanted: Strength +" .. item.enchant end
+    if item.critEnchant then lines[#lines+1]=item.critEnchant end
     if item.classes then lines[#lines+1]="Classes: " .. item.classes end
     if item.use then lines[#lines+1]=item.use end
     return lines
@@ -67,7 +79,9 @@ C_Item={
         reads=reads+1
         local item=definition(link)
         if item.ammoDps then return {ITEM_MOD_DAMAGE_PER_SECOND_SHORT=item.ammoDps} end
-        local stats = {ITEM_MOD_STRENGTH_SHORT=item.strength,ITEM_MOD_CRIT_SHORT=item.crit}
+        local stats = {ITEM_MOD_STRENGTH_SHORT=item.strength,ITEM_MOD_CRIT_SHORT=item.genericCrit}
+        if item.critRating then stats.ITEM_MOD_CRIT_RATING_SHORT=item.critRating end
+        if item.spellCritRating then stats.ITEM_MOD_SPELL_CRIT_RATING_SHORT=item.spellCritRating end
         if item.spellPower then stats.ITEM_MOD_SPELL_POWER_SHORT=item.spellPower end
         if item.unknown then stats.ITEM_MOD_FOREVER_FOCUS_SHORT=item.unknown end
         return stats
@@ -131,8 +145,8 @@ local actualScoreStats=FW.ScoreStats
 function FW:ScoreStats(profile,stats) scoreCalls=scoreCalls+1;return actualScoreStats(self,profile,stats) end
 FW:Initialize()
 local one=FW:GetProfiles()[1]
-assert(FW:UpdateProfile(one.id,{name="Melee",weights={strength=2,crit=10}}))
-local two=assert(FW:CreateProfile("Caster",{crit=5}))
+assert(FW:UpdateProfile(one.id,{name="Melee",weights={strength=2,meleeCrit=10,spellCrit=0}}))
+local two=assert(FW:CreateProfile("Caster",{meleeCrit=0,spellCrit=5}))
 FW:InstallTooltipHooks()
 GameTooltip:SetHyperlink(candidate)
 assert(reads==2 and scans==2 and scoreCalls==4)
@@ -378,7 +392,7 @@ GetContainerItemLink=function() return savedSetLink end
 FW:InvalidateEquipmentSetBaselines()
 for _,profile in ipairs(FW:GetProfiles()) do assert(FW:SetProfileUpgradeEnabled(profile.id,false)) end
 assert(FW:UpdateProfile(one.id,{comparisonTarget={mode="equipped"},upgradeEnabled=true}))
-assert(FW:UpdateProfile(two.id,{weights={strength=-1,crit=0},upgradeEnabled=true,
+assert(FW:UpdateProfile(two.id,{weights={strength=-1,meleeCrit=0,spellCrit=0},upgradeEnabled=true,
     comparisonTarget={mode="set",setID=7,name="Caster set",character="Player-Integration"}}))
 local full=assert(FW:CompareItem(candidate,two))
 assert(full.comparisons[1].baseline==-15 and full.comparisons[1].status=="upgrade",
@@ -398,6 +412,85 @@ assert(FW:UpdateProfile(two.id,{comparisonTarget={mode="set",setID=7,name="Caste
 assert(FW:CompareItem(candidate,two).pending and #FW:GetItemUpgradeProfiles(candidate)==1,
     "A set from another character never becomes an empty/equipped baseline")
 
+-- Distinct Crit weights travel through the real parser, cached scoring, Base
+-- variants, on-use averages, comparison decisions and tooltip sublines.
+local splitProfile=assert(FW:CreateProfile("Split Crit",{strength=2,meleeCrit=2,spellCrit=7}))
+for _,profile in ipairs({one,two,ammoProfile,averageProfile}) do assert(FW:UpdateProfile(profile.id,{active=false})) end
+local splitCandidate="item:119:8481:0:0:0:0:0:0:60"
+local splitBase="item:119:0:0:0:0:0:0:0:60"
+baseline="item:120:8481:0:0:0:0:0:0:60"
+assert(FW:SetMainProfile(splitProfile.id))
+local splitScore,splitRecord=FW:GetScore(splitCandidate,splitProfile)
+assert(splitScore==30 and splitRecord.percentStats.meleeCrit==3 and splitRecord.percentStats.spellCrit==2,
+    "generic Crit supplies both channels while distinct attack/spell rows add only their own channel")
+assert(splitRecord.percentStats.crit==nil and splitRecord.stats.crit==nil and splitRecord.ratingStats.crit==nil,
+    "parsed item records contain canonical Crit channels only")
+assert(FW:GetBaseScore(splitCandidate,splitProfile)==20,
+    "the Base variant preserves both independently weighted Crit channels")
+local splitAverage,splitBaseRecord,_,splitMetadata=FW:GetAverageUseScore(splitCandidate,splitProfile)
+assert(splitAverage==24.5 and splitBaseRecord==FW:GetItem(splitBase) and splitMetadata.averageUseGain==4.5,
+    "a generic on-use Crit bonus uses both weights once on the Base score")
+assert(splitBaseRecord.onUsePercentStats.meleeCrit==.5 and splitBaseRecord.onUsePercentStats.spellCrit==.5)
+local splitEquippedAverage,splitEquippedRecord=FW:GetAverageUseScore(baseline,splitProfile)
+assert(splitEquippedAverage==26.5 and not splitEquippedRecord.onUsePercentStats.meleeCrit and splitEquippedRecord.onUsePercentStats.spellCrit==.5,
+    "a spell-only on-use Crit bonus does not contribute melee Crit")
+local splitComparison=assert(FW:CompareItem(splitCandidate,splitProfile))
+assert(splitComparison.score==30 and splitComparison.comparisons[1].baseline==25 and splitComparison.comparisons[1].delta==5)
+assert(FW:CompareBaseItem(splitCandidate,splitProfile).comparisons[1].delta==-3)
+assert(FW:CompareAverageUseItem(splitCandidate,splitProfile).comparisons[1].delta==-2)
+GameTooltip:SetHyperlink(splitCandidate)
+assert(findLine("Split Crit").right=="30.00  |cff40ff59|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowUp:12:12:0:0|t+5.00 (+20.0%)|r")
+assert(findLine("  Base").right=="20.00  |cffff5959|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowDown:10:10:0:0|t-3.00 (-13.0%)|r")
+assert(findLine("  Average use").right=="24.50  |cffff5959|TInterface\\AddOns\\ZwykValues\\Textures\\ArrowDown:10:10:0:0|t-2.00 (-7.5%)|r")
+assert(not findLine("Partial stat data; /zv inspect or /zv exportissues."))
+local splitReads,splitScans,splitScoreCalls=reads,scans,scoreCalls
+GameTooltip:SetHyperlink(splitCandidate)
+assert(reads==splitReads and scans==splitScans and scoreCalls==splitScoreCalls,
+    "repeat split Crit tooltips reuse item, full/Base and average-use caches")
+assert(FW:UpdateProfile(splitProfile.id,{weights={spellCrit=8}}))
+assert(FW:GetScore(splitCandidate,splitProfile)==32 and FW:GetBaseScore(splitCandidate,splitProfile)==22,
+    "updating one Crit weight preserves the other channel and invalidates weighted caches")
+assert(FW:GetAverageUseScore(splitCandidate,splitProfile)==27)
+assert(reads==splitReads and scans==splitScans,
+    "split Crit weight changes reuse parsed static and on-use stats")
+baseline=oldBaseline
+
+-- An enchant's known percentage cannot establish the unknown percentage value
+-- of an inherent rating bonus. Keep its known subtotal and scoped diagnostics.
+local unresolvedEnchant="item:121:8481:0:0:0:0:0:0:60"
+local unresolvedBase="item:121:0:0:0:0:0:0:0:60"
+local knownSpell="item:122:0:0:0:0:0:0:0:60"
+local enchantSubtotal,enchantRecord=FW:GetScore(unresolvedEnchant,splitProfile)
+assert(enchantSubtotal==8 and enchantRecord.percentStats.spellCrit==1,
+    "the readable spell Crit enchant still contributes its known subtotal")
+local enchantIssue=enchantRecord.scoreIssues and enchantRecord.scoreIssues[splitProfile.id]
+assert(enchantIssue and enchantIssue.missingStats.spellCrit and not enchantIssue.missingStats.meleeCrit,
+    "a known enchant does not resolve the inherent spell rating or contaminate melee warnings")
+local baseSubtotal,unresolvedBaseRecord=FW:GetBaseScore(unresolvedEnchant,splitProfile)
+local unresolvedBaseIssue=unresolvedBaseRecord.scoreIssues and unresolvedBaseRecord.scoreIssues[splitProfile.id]
+assert(baseSubtotal==0 and unresolvedBaseIssue and unresolvedBaseIssue.missingStats.spellCrit,
+    "the Base variant retains its unresolved inherent spell Crit warning")
+assert(not FW.DB.cache.scores[FW:ItemKey(unresolvedEnchant)] and not FW.DB.cache.scores[FW:ItemKey(unresolvedBase)],
+    "known enchant subtotals cannot enter the complete score cache")
+local knownSpellSubtotal,knownSpellRecord=FW:GetScore(knownSpell,splitProfile)
+assert(knownSpellSubtotal==8 and knownSpellRecord.scoreIssues[splitProfile.id].missingStats.meleeCrit
+    and not knownSpellRecord.scoreIssues[splitProfile.id].missingStats.spellCrit,
+    "an inherent spell percentage resolves only spell Crit from a generic API rating")
+GameTooltip:SetHyperlink(unresolvedEnchant)
+assert(findLine("Split Crit").right:find("8.00",1,true) and findLine("  Base").right:find("0.00",1,true)
+    and findLine("Partial stat data; /zv inspect or /zv exportissues."),
+    "full and Base tooltips retain readable enchant values with the incomplete-stat warning")
+local ratingEnchant="item:123:8481:0:0:0:0:0:0:60"
+local ratingEnchantSubtotal,ratingEnchantRecord=FW:GetScore(ratingEnchant,splitProfile)
+local ratingEnchantIssue=ratingEnchantRecord.scoreIssues and ratingEnchantRecord.scoreIssues[splitProfile.id]
+assert(ratingEnchantSubtotal==10 and ratingEnchantIssue and ratingEnchantIssue.missingStats.spellCrit
+    and not ratingEnchantIssue.missingStats.meleeCrit,
+    "known inherent percentages cannot resolve the unknown percentage of a spell Crit rating enchant")
+local cleanBaseSubtotal,cleanBaseRecord=FW:GetBaseScore(ratingEnchant,splitProfile)
+assert(cleanBaseSubtotal==10 and not cleanBaseRecord.scoreIssues[splitProfile.id]
+    and FW.DB.cache.scores[cleanBaseRecord.key][splitProfile.id].score==10,
+    "removing an unresolved rating enchant restores a complete cached Base score")
+
 -- SavedVariables reused by a fresh addon namespace keep valid item totals.
 local persisted=ZwykValuesDB
 local reloaded={}
@@ -410,6 +503,8 @@ assert(reloaded.DB==persisted)
 local previousReads=reads
 assert(reloaded:GetScore(candidate,reloaded.DB.profiles[one.id])==40)
 assert(reads==previousReads)
+assert(reloaded:GetScore(splitCandidate,reloaded.DB.profiles[splitProfile.id])==32 and reads==previousReads,
+    "SavedVariables retain canonical split Crit item records and weighted totals without rereading")
 
 -- Level-sensitive tooltip interpretation uses a distinct cache key.
 level=61

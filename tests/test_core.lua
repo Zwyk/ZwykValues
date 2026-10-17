@@ -310,6 +310,23 @@ local unresolvedScore, unresolvedError = FW:GetScore("unresolved", weighted)
 equal(unresolvedScore, 0)
 contains(FW:ItemIssueSummary(unresolvedError, weighted), "unavailable")
 equal(FW:GetScore("unresolved", second), 0, "unweighted unknown secondary stats do not prevent scoring")
+records.knownSecondary = {key="knownSecondary",stats={strength=2},
+    percentStats={meleeCrit=1,spellCrit=2},ratingStats={spellCrit=7},unresolvedStats={spellCrit=true},warnings={}}
+local secondaryProfile = assert(FW:CreateProfile("Known crit subtotal", {strength=1,meleeCrit=3,spellCrit=10}))
+local knownSecondaryScore, knownSecondaryRecord, knownSecondaryDetail = FW:GetScore("knownSecondary",secondaryProfile)
+equal(knownSecondaryScore,25,"known percentage points remain in a partially unresolved secondary subtotal")
+contains(knownSecondaryDetail,"known value contributes")
+check(knownSecondaryRecord.scoreIssues[secondaryProfile.id].missingStats.spellCrit)
+equal(knownSecondaryRecord.scoreIssues[secondaryProfile.id].missingStats.meleeCrit,nil,
+    "an unresolved spell contribution does not contaminate the attack channel")
+equal(FW.DB.cache.scores.knownSecondary,nil,"known secondary subtotals never enter the complete score cache")
+local attackOnlyProfile = assert(FW:CreateProfile("Known attack crit", {meleeCrit=3}))
+equal(FW:GetScore("knownSecondary",attackOnlyProfile),3,"unweighted unresolved spell crit does not alter the attack score")
+equal(knownSecondaryRecord.scoreIssues[attackOnlyProfile.id],nil)
+equal(FW.DB.cache.scores.knownSecondary[attackOnlyProfile.id].score,3,
+    "an unaffected profile can retain its complete score")
+equal(FW.DB.cache.scores.knownSecondary[secondaryProfile.id],nil,
+    "another profile's complete cache does not acquire the unresolved subtotal")
 records.partial = { key = "partial", stats = { strength = 5 }, percentStats = {}, ratingStats = {}, partial = true, warnings = { "Proc is unweighted" } }
 local partialScore, partialRecord = FW:GetScore("partial", second)
 equal(partialScore, 5)
@@ -346,6 +363,7 @@ assert(FW:UpdateProfile(unitFixProfile.id, { secondaryUnit = "rating" }))
 equal(FW:GetScore("resolvedUnit", unitFixProfile), 2, "legacy requests never substitute rating values")
 check(FW.DB.itemIssues.resolvedUnit.scoreIssues[unitFixProfile.id], "rating-only values remain unavailable")
 records.resolvedUnit.percentStats.hit = 1
+records.resolvedUnit.unresolvedStats.hit = nil
 equal(FW:GetScore("resolvedUnit", unitFixProfile), 4)
 equal(FW.DB.itemIssues.resolvedUnit.scoreIssues[unitFixProfile.id], nil, "recomputed successful unit selection removes the old profile warning")
 equal(FW.DB.itemIssues.resolvedUnit.profileScores[unitFixProfile.id].score, 4)
@@ -611,5 +629,79 @@ assert(FW:SetProfileUpgradeEnabled("other", true))
 assert(FW:SetMainProfile("old"))
 equal(#FW:GetUpgradeProfiles(), 1, "legacy single-selection callers retain their existing behavior")
 equal(FW:GetUpgradeProfiles()[1].id, "old")
+
+-- Crit has separate attack/spell weights. Legacy-only input is an import
+-- alias, never a hidden third scoring field; its generic item total is kept.
+reset()
+equal(FW.StatByKey.crit, nil, "combined critical strike is no longer a visible stat")
+check(FW.StatByKey.meleeCrit.secondary and FW.StatByKey.spellCrit.secondary)
+equal(FW:GetProfiles()[1].weights.meleeCrit, 0)
+equal(FW:GetProfiles()[1].weights.spellCrit, 0)
+local splitCrit = assert(FW:CreateProfile("Legacy crit", {crit=10,strength=2}))
+equal(splitCrit.weights.crit, nil)
+equal(splitCrit.weights.meleeCrit, 5)
+equal(splitCrit.weights.spellCrit, 5)
+equal(FW:ScoreStats(splitCrit, {meleeCrit=1,spellCrit=1}), 10, "generic crit retains its old combined value")
+equal(FW:ScoreStats(splitCrit, {meleeCrit=1}), 5, "attack-only crit uses only its channel")
+equal(FW:ScoreStats(splitCrit, {spellCrit=1}), 5, "spell-only crit uses only its channel")
+assert(FW:UpdateProfile(splitCrit.id, {weights={meleeCrit=8}}))
+equal(splitCrit.weights.spellCrit, 5, "partial attack-crit changes preserve spell crit")
+assert(FW:UpdateProfile(splitCrit.id, {weights={spellCrit=3}}))
+equal(splitCrit.weights.meleeCrit, 8, "partial spell-crit changes preserve attack crit")
+assert(FW:UpdateProfile(splitCrit.id, {weights={crit=-4}}))
+equal(splitCrit.weights.meleeCrit, -2)
+equal(splitCrit.weights.spellCrit, -2)
+equal(splitCrit.weights.strength, 2, "a legacy crit update preserves unrelated weights")
+equal(splitCrit.weights.crit, nil)
+local splitCopy = assert(FW:CopyProfile(splitCrit.id))
+equal(splitCopy.weights.meleeCrit, -2); equal(splitCopy.weights.spellCrit, -2)
+local splitExport = assert(json.Decode(assert(FW:ExportProfile(splitCrit.id))))
+equal(splitExport.weights.crit, nil, "new exports contain only the two explicit channels")
+equal(splitExport.weights.meleeCrit, -2); equal(splitExport.weights.spellCrit, -2)
+local splitRoundtrip = assert(FW:ImportProfile(assert(json.Encode(splitExport))))
+equal(splitRoundtrip.weights.meleeCrit, -2); equal(splitRoundtrip.weights.spellCrit, -2)
+local oldCritEnvelope = {format="ZwykValues",version=1,name="Older crit",weights={crit=6}}
+local oldCritImport, _, critWarnings = FW:ImportProfile(assert(json.Encode(oldCritEnvelope)))
+check(oldCritImport)
+equal(oldCritImport.weights.meleeCrit, 3); equal(oldCritImport.weights.spellCrit, 3)
+contains(table.concat(critWarnings," "), "split evenly")
+local zeroCrit = assert(FW:ImportProfile('{"crit":0}', "Zero crit"))
+equal(zeroCrit.weights.meleeCrit, 0); equal(zeroCrit.weights.spellCrit, 0)
+for _, mixed in ipairs({{crit=10,meleeCrit=1},{crit=10,spellCrit=1},{crit=0,meleeCrit=0,spellCrit=0}}) do
+    local count = #FW:GetProfiles()
+    local previousName = splitCrit.name
+    equal(FW:CreateProfile("Mixed", mixed), nil)
+    equal(FW:UpdateProfile(splitCrit.id, {name="Must not change",weights=mixed}), nil)
+    equal(splitCrit.name, previousName, "mixed legacy/canonical changes fail atomically")
+    oldCritEnvelope.weights = mixed
+    equal(FW:ImportProfile(assert(json.Encode(oldCritEnvelope))), nil)
+    equal(#FW:GetProfiles(), count)
+end
+
+-- SavedVariables migration is independent of imported profile IDs and clears
+-- the old parser/score cache. Canonical explicit values win over corrupt mixes.
+ZwykValuesDB = {profiles={legacy={name="Legacy",weights={crit=10},secondaryUnit="rating",revision=8},
+    mixed={name="Mixed saved",weights={crit=100,meleeCrit=2,spellCrit=7},revision=3}},
+    profileOrder={"legacy","mixed"},options={},cache={version=2,items={stale={key="stale"}},
+        scores={stale={legacy={revision=8,score=1000}}},itemOrder={"stale"}}}
+FW.DB = nil
+FW:Initialize()
+equal(FW.CACHE_VERSION, 3)
+equal(FW.DB.cache.version, 3)
+equal(next(FW.DB.cache.items), nil, "cached old combined-crit item data is discarded")
+equal(next(FW.DB.cache.scores), nil, "cached old combined-crit scores are discarded")
+equal(FW.DB.profiles.legacy.weights.meleeCrit, 5)
+equal(FW.DB.profiles.legacy.weights.spellCrit, 5)
+equal(FW.DB.profiles.legacy.weights.crit, nil)
+equal(FW.DB.profiles.legacy.secondaryUnit, "percent")
+equal(FW.DB.profiles.legacy.revision, 9, "rating and crit migration invalidate the profile once")
+equal(FW.DB.profiles.mixed.weights.meleeCrit, 2)
+equal(FW.DB.profiles.mixed.weights.spellCrit, 7)
+equal(FW.DB.profiles.mixed.weights.crit, nil)
+FW.DB = nil
+FW:Initialize()
+equal(FW.DB.profiles.legacy.revision, 9, "the same saved profile is not split twice")
+equal(FW.DB.profiles.legacy.weights.meleeCrit, 5)
+equal(FW.DB.profiles.legacy.weights.spellCrit, 5)
 
 print("Core/JSON: " .. passed .. " checks passed.")
