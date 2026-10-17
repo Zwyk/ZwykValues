@@ -337,7 +337,7 @@ local function showComparisonPicker()
         local selected = target.mode == "equipped" and (not profile.comparisonTarget or profile.comparisonTarget.mode == "equipped") or
             target.mode == "set" and profile.comparisonTarget and profile.comparisonTarget.mode == "set" and target.setID == profile.comparisonTarget.setID and target.character == profile.comparisonTarget.character
         row.target = target
-        row.caption:SetText((selected and "✓ " or "") .. (choice.name or "Equipment set"))
+        row.caption:SetText((selected and "|TInterface\\Buttons\\UI-CheckBox-Check:14:14:0:0|t " or "") .. (choice.name or "Equipment set"))
         row.icon:SetTexture(choice.icon)
         row.icon:SetShown(choice.icon ~= nil)
         row:SetScript("OnClick", function()

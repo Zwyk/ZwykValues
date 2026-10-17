@@ -1,6 +1,8 @@
-# ZwykValues 0.1.20
+# ZwykValues 0.1.21
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
+
+Version 0.1.21 replaces the comparison picker's selected-row character with a native check-mark texture so it displays with the game's fonts.
 
 ## Installation
 
