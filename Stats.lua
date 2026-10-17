@@ -10,6 +10,7 @@ FW.StatDefinitions = {
     { key = "intellect", label = "Intellect", group = "Attributes" },
     { key = "spirit", label = "Spirit", group = "Attributes" },
     { key = "health", label = "Health", group = "Resources" },
+    { key = "mana", label = "Mana", group = "Resources" },
     { key = "hp5", label = "Health per 5 seconds", group = "Resources" },
     { key = "spellDamage", label = "Spell damage", group = "Spell" },
     { key = "healing", label = "Healing", group = "Spell" },

@@ -156,7 +156,8 @@ FW = newReader({ raw = { ITEM_MOD_STRENGTH_SHORT = 3, ITEM_MOD_FUTURE_SHORT = 10
 } })
 item = assert(FW:GetItem("item:109"))
 equal(item.partial, true)
-equal(#item.unrecognizedLines, 3)
+equal(#item.unrecognizedLines, 2)
+equal(item.stats.mana, 5, "flat Mana is a supported resource stat")
 equal(item.unrecognizedLines[1].text, "+3 Strength and +1% Dodge")
 equal(next(FW.DB.cache.items), nil, "incomplete extraction is not persisted")
 equal(FW:GetIssueReport().itemCount, 1, "issue item is persisted independently of the normal cache")
@@ -343,7 +344,7 @@ for _, sample in ipairs(foreverCases) do
     equal(next(item.unresolvedStats), nil)
     equal(FW:GetIssueReport().itemCount, 0)
     equal(FW:GetItem("item:" .. sample.id .. ":8481"), item, "resolved item caches")
-    equal(item.parserVersion, 9, "old persisted parser results receive a new key")
+    equal(item.parserVersion, 10, "old persisted parser results receive a new key")
 end
 
 FW = newReader({ raw = { RESISTANCE0_NAME = 141, ITEM_MOD_STAMINA_SHORT = 4 },
@@ -421,7 +422,7 @@ equal(FW.DB.cache.items[item.key],nil,"missing ammo DPS is never cached as a com
 
 FW = newReader({raw={},classID=6,subclassID=2,equipLoc="INVTYPE_AMMO",lines={"Arrow","Adds 7.5 damage per second"}})
 local ammoProfile = assert(FW:CreateProfile("Cache migration",{rangedDps=2,dps=100}))
-local oldAmmoKey = FW:ItemKey("item:511"):gsub("^9|","4|")
+local oldAmmoKey = FW:ItemKey("item:511"):gsub("^10|","4|")
 FW.DB.cache.items[oldAmmoKey] = {key=oldAmmoKey,stats={dps=7.5},equipLoc="INVTYPE_AMMO"}
 FW.DB.cache.scores[oldAmmoKey] = {[ammoProfile.id]={revision=ammoProfile.revision,score=750}}
 equal(FW:GetScore("item:511",ammoProfile),15,"parser update ignores ammo previously cached as melee DPS")
@@ -509,5 +510,78 @@ equal(modernCalls,2); equal(tooltipCalls,2,"unchecked second Base variant does n
 equal(FW.DB.cache.items[FW:ItemKey("item:791:0:0")],nil)
 equal(FW:GetBaseScore(freshBaselineLink,included),99,"included profile can later parse a previously excluded Base variant")
 equal(modernCalls,3); equal(tooltipCalls,3)
+
+-- Flat Mana is independent from Intellect and from Mana per 5 seconds. API
+-- aliases and matching tooltip text describe the same stat, not extra copies.
+FW = newReader({raw={ITEM_MOD_MANA_SHORT=100,ITEM_MOD_MANA=100,ITEM_MOD_INTELLECT_SHORT=5},
+    lines={"Mana ring","+100 Mana","+5 Intellect","Equip: Restores 4 mana per 5 sec."}})
+local manaProfile = assert(FW:CreateProfile("Mana resources",{mana=0.4,mp5=2,intellect=1}))
+item = assert(FW:GetItem("item:800"))
+equal(item.stats.mana,100); equal(item.stats.mp5,4); equal(item.stats.intellect,5)
+equal(item.partial,false); equal(#item.diagnostic.ignoredKeys,0)
+equal(FW:GetScore(item.link,manaProfile),53,"Mana is scored once separately from Intellect and MP5")
+
+for index, text in ipairs({"+80 points de mana","Mana +80","+80 mana maximum","+80 Maximum Mana"}) do
+    FW = newReader({raw={},lines={"Mana ring",text}})
+    locale = (index == 1 or index == 3) and "frFR" or "enUS"
+    item = assert(FW:GetItem("item:" .. (810+index)))
+    equal(item.stats.mana,80,"English/French flat Mana: " .. text)
+    equal(item.partial,false)
+end
+local previousManaLabel = ITEM_MOD_MANA_SHORT
+ITEM_MOD_MANA_SHORT = "Magicka"
+FW = newReader({raw={},lines={"Localized resource ring","+45 Magicka"}})
+item = assert(FW:GetItem("item:820"))
+equal(item.stats.mana,45,"native localized Mana labels are available to tooltip parsing")
+ITEM_MOD_MANA_SHORT = previousManaLabel
+
+FW = newReader({raw={ITEM_MOD_INTELLECT_SHORT=10},lines={"Intellect ring","+10 Intellect",
+    "Equip: Restores 5 mana per 5 sec.","Use: Restores 300 mana over 10 sec. (2 Min Cooldown)"}})
+item = assert(FW:GetItem("item:821"))
+equal(item.stats.mana,nil,"Intellect, MP5 and resource restoration never become flat Mana")
+equal(item.stats.mp5,5); equal(item.onUseStats.mana,nil,"restoring Mana is not a temporary flat-stat buff")
+
+-- Enchant and averaged-use paths reuse the same flat-stat handling as Health.
+FW = newReader({raw={ITEM_MOD_MANA_SHORT=100},lines={"Mana trinket","+100 Mana"}})
+C_TooltipInfo.GetHyperlink = function(link)
+    local lines={{leftText="Mana trinket"},{leftText="+100 Mana"},
+        {leftText="Use: Increases your maximum mana by 120 for 10 sec. (2 Min Cooldown)"}}
+    if link:match("item:822:42") then lines[#lines+1]={leftText="Enchanted: Mana +20"} end
+    return {lines=lines}
+end
+manaProfile = assert(FW:CreateProfile("Flat Mana variants",{mana=0.4}))
+item = assert(FW:GetItem("item:822:42:0"))
+equal(item.stats.mana,120,"flat Mana enchants add once to the base stat")
+equal(item.onUseStats.mana,10,"flat maximum-Mana buffs are averaged from duration and cooldown")
+equal(item.partial,false)
+equal(FW:GetScore(item.link,manaProfile),48)
+equal(FW:GetBaseScore(item.link,manaProfile),40,"Base strips the enchant but retains inherent Mana")
+equal(FW:GetAverageUseScore(item.link,manaProfile),44,"average-use Mana is added to unenchanted Base")
+
+FW = newReader({raw={ITEM_MOD_MANA_SHORT=60},lines={"Bijou de mana","+60 points de mana",
+    "Enchanté : +15 points de mana",
+    "Utiliser : Augmente votre mana maximum de 120 pendant 10 sec. (2 min de recharge)"}})
+locale = "frFR"
+item = assert(FW:GetItem("item:8221:42:0"))
+equal(item.stats.mana,75,"French Mana enchants share the flat-resource path")
+equal(item.onUseStats.mana,10,"French maximum-Mana buffs use the same uptime calculation")
+equal(item.partial,false)
+
+FW = newReader({raw={ITEM_MOD_MANA_SHORT="unavailable"},lines={"Unread Mana ring","+2 Intellect"}})
+manaProfile = assert(FW:CreateProfile("Unread Mana",{mana=1}))
+item = assert(FW:GetItem("item:823"))
+equal(item.unresolvedStats.mana,true,"unavailable native Mana values remain unresolved")
+equal(item.partial,true)
+local manaSubtotal, manaRecord = FW:GetScore(item.link,manaProfile)
+equal(manaSubtotal,0,"unread Mana contributes only its known subtotal")
+assert(manaRecord.scoreIssues[manaProfile.id].missingStats.mana)
+
+FW = newReader({raw={ITEM_MOD_MANA_SHORT=60},lines={"Mana ring","+60 Mana"}})
+manaProfile = assert(FW:CreateProfile("Mana cache migration",{mana=1}))
+local oldManaKey = FW:ItemKey("item:824"):gsub("^10|","9|")
+FW.DB.cache.items[oldManaKey] = {key=oldManaKey,stats={},equipLoc="INVTYPE_HEAD",classID=4,subclassID=4}
+FW.DB.cache.scores[oldManaKey] = {[manaProfile.id]={revision=manaProfile.revision,score=0}}
+equal(FW:GetScore("item:824",manaProfile),60,"old complete records that ignored Mana are reparsed")
+equal(modernCalls,1)
 
 print("Items tests passed")

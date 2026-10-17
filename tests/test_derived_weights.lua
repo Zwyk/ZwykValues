@@ -22,7 +22,13 @@ local function reset(class, level)
     GetCritChanceFromStat,GetSpellCritChanceFromStat=nil,nil
     GetCritChanceFromAgility,GetSpellCritChanceFromIntellect=nil,nil
     GetAttackPowerForStat,GetRangedAttackPowerForStat,UnitHPPerStamina=nil,nil,nil
-    GetActiveSpecGroup,C_SpecializationInfo,C_ClassTalents,C_Traits,IsPlayerSpell=nil,nil,nil,nil,nil
+    GetActiveSpecGroup,C_SpecializationInfo,IsPlayerSpell=nil,nil,nil
+    C_ClassTalents={GetActiveConfigID=function() return 1 end}
+    C_Traits={GetNodeInfo=function() return {activeRank=0} end}
+    GetShapeshiftFormID=function() return form end
+    UnitArmor=function() return 700,1000,800,200 end
+    C_PaperDollInfo,UnitEffectiveLevel=nil,nil
+    INTELLECT_BREAK,MANA_PER_INTELLECT,ATTACK_POWER_MAGIC_NUMBER,LOCALIZED_CLASS_NAMES_MALE=nil,nil,nil,nil
     issecretvalue=nil
 end
 local function calculate(key, weights, options)
@@ -70,7 +76,7 @@ reset("MAGE",60)
 close(calculate("intellect",{crit=10}).value,0.168)
 playerLevel=1
 close(calculate("intellect",{crit=10}).value,1.92)
-has(calculate("intellect",{crit=10}).lines,"no Mana weight")
+has(calculate("intellect",{crit=10}).assumptions,"First 20 Intellect")
 reset("WARRIOR",60)
 close(calculate("intellect",{crit=10}).value,0,"Non-mana classes do not get an invented spell crit conversion")
 
@@ -179,6 +185,152 @@ IsPlayerSpell=function() return false end
 close(calculate("defense",{dodge=2,parry=3,block=5}).value,0.28,"Unlearned parry contributes nothing")
 reset("DRUID")
 close(calculate("defense",{dodge=2,parry=3,block=5}).value,0.08,"Druids cannot parry or block")
+
+-- Resource equivalence is reversible after removing Intellect's other
+-- modeled effects. Mana is one resource point, not MP5 or an invented fight.
+reset("PALADIN")
+check(FW:IsDerivedWeightStat("mana")); check(FW:IsDerivedWeightStat("dps"))
+check(FW:IsDerivedWeightStat("rangedDps")); check(FW:IsDerivedWeightStat("armor"))
+local intResult=calculate("intellect",{mana=0.1,crit=10})
+close(intResult.value,1.667)
+close(calculate("mana",{intellect=intResult.value,crit=10}).value,0.1,"Intellect/Mana inverse removes spell crit")
+equal(intResult.title,"Calculate Intellect")
+check(intResult.contextText:find("Paladin",1,true))
+check(intResult.formula:find("15 x Mana",1,true))
+check(intResult.contributions==intResult.sources and #intResult.contributions>0)
+check(#intResult.assumptions>0 and #intResult.provenance>0 and #intResult.footer>0)
+for _, source in ipairs(intResult.provenance) do check(not source:find("level",1,true),"Sources do not repeat context") end
+local negativeMana=calculate("mana",{intellect=0.01,crit=10})
+check(negativeMana.value<0)
+has(negativeMana.assumptions,"inferred Mana weight is negative")
+check(negativeMana.formula:find("other modeled contributions",1,true))
+reset("HUNTER")
+GetAttackPowerForStat=function(index,value) return 10+(index==4 and value*0.5 or 0) end
+GetRangedAttackPowerForStat=function(index,value) return 20+(index==4 and value*0.8 or 0) end
+local hunterInt=calculate("intellect",{mana=0.2,attackPower=2,rangedAttackPower=3,crit=10}).value
+close(calculate("mana",{intellect=hunterInt,attackPower=2,rangedAttackPower=3,crit=10}).value,0.2,"Mana inverse removes native melee and ranged AP as well as crit")
+reset()
+for _, entry in ipairs({{19,1},{19.5,8},{20,15},{100,15}}) do
+    stats[4]=entry[1]
+    close(calculate("intellect",{mana=2}).value,entry[2]*2,"First20 Intellect Mana threshold")
+    close(calculate("mana",{intellect=entry[2]*2}).value,2,"Inverse uses same next-point threshold")
+end
+MANA_PER_INTELLECT=18
+close(calculate("intellect",{mana=2}).value,36,"Native Mana constant takes priority")
+stats[4]=nil
+close(calculate("intellect",{crit=10,mana=0}).value,0.167,"Unknown Mana rate does not block zero-weight Mana")
+equal(FW:GetDerivedWeightOptions("intellect",{mana=1}).available,false)
+equal(FW:GetDerivedWeightOptions("mana",{intellect=1}).available,false)
+reset("WARRIOR")
+equal(FW:GetDerivedWeightOptions("mana",{intellect=1}).available,false,"Warrior has no Mana resource")
+
+-- Reciprocal autoattack-DPS conversions use the same live client constant.
+reset("HUNTER")
+local meleeDPS=calculate("dps",{attackPower=0.2}).value
+close(meleeDPS,2.8)
+close(calculate("attackPower",{dps=meleeDPS}).value,0.2)
+local rangedDPS=calculate("rangedDps",{rangedAttackPower=0.3}).value
+close(rangedDPS,4.2)
+close(calculate("rangedAttackPower",{rangedDps=rangedDPS}).value,0.3)
+ATTACK_POWER_MAGIC_NUMBER=10
+close(calculate("dps",{attackPower=0.2}).value,2)
+close(calculate("attackPower",{dps=2}).value,0.2)
+reset("MAGE")
+equal(FW:GetDerivedWeightOptions("rangedDps",{rangedAttackPower=1}).available,false,"Wand DPS has no AP equivalence")
+
+-- Armor uses the Forever API and absolute percentage points. This test API
+-- yields 20% current DR, then +0.02pp for one Armor: no /(1-currentDR) factor.
+reset("PALADIN")
+local armorCalls={}
+C_PaperDollInfo={GetArmorEffectiveness=function(armor,level)
+    armorCalls[#armorCalls+1]={armor,level}; return armor*0.0002
+end}
+UnitEffectiveLevel=function() return 58 end
+local armorResult=calculate("armor",{dodge=10})
+close(armorResult.value,0.2,"One pp DR is priced as one pp Dodge")
+equal(armorCalls[1][1],1000,"Use effective Armor, second UnitArmor return")
+equal(armorCalls[2][1],1001)
+equal(armorCalls[1][2],58,"Use player effective level as default attacker level")
+equal(armorResult.armorContext.attackerLevel,58)
+has(armorResult.assumptions,"1 percentage point of physical damage reduction")
+has(armorResult.assumptions,"form/talent Armor multipliers are not included")
+check(armorResult.contextText:find("1000 Armor",1,true))
+close(calculate("armor",{dodge=-10},{attackerLevel=63}).value,-0.2,"Negative source weights stay valid")
+equal(armorCalls[#armorCalls][2],63,"Explicit attacker level overrides default")
+C_PaperDollInfo.GetArmorEffectiveness=function(armor) return math.min(0.75,armor*0.001) end
+local capped=calculate("armor",{dodge=10})
+close(capped.value,0)
+has(capped.assumptions,"next Armor point adds no reduction")
+equal(#capped.contributions,1,"Cap result explains the zero contribution")
+C_PaperDollInfo.GetArmorEffectiveness=function() error("unavailable") end
+equal(FW:GetDerivedWeightOptions("armor",{dodge=10}).available,false,"Native API errors do not use a Vanilla formula")
+C_PaperDollInfo=nil
+equal(FW:GetDerivedWeightOptions("armor",{dodge=10}).available,false,"Missing Forever API does not invent current Armor formula")
+C_PaperDollInfo={GetArmorEffectiveness=function(armor) return armor==1000 and 0.4 or 0.3 end}
+equal(FW:GetDerivedWeightOptions("armor",{dodge=10}).available,false,"Negative mitigation slope is rejected")
+C_PaperDollInfo.GetArmorEffectiveness=function() return 20 end
+equal(FW:GetDerivedWeightOptions("armor",{dodge=10}).available,false,"Do not confuse native fraction with already-percent data")
+UnitArmor=function() return 1000 end
+equal(FW:GetDerivedWeightOptions("armor",{dodge=10}).available,false,"No total-Armor/base-Armor ratio guesses")
+
+-- Item-primary multipliers apply once, and current ranks are re-read rather
+-- than saved in profile options. All reciprocal conversions use the same M.
+reset("PALADIN")
+local ranks={[105328]=3,[105332]=5,[105632]=2}
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=ranks[node] or 0} end
+local bonuses={kings=true,useTalents=true}
+local strengthBonus=calculate("strength",{attackPower=1},bonuses)
+close(strengthBonus.value,2*1.1*1.06)
+check(strengthBonus.params.kings and strengthBonus.params.useTalents)
+check(strengthBonus.talentSummary:find("Divine Strength 3/5 (+6%)",1,true))
+close(calculate("strength",{attackPower=1},{kings=true,useTalents=false}).value,2.2,"Unchecking talents preserves optional Kings")
+close(calculate("strength",{attackPower=1},{kings=false,useTalents=false}).value,2,"Explicit false values do not fall through to defaults")
+ranks[105328]=5
+close(calculate("strength",{attackPower=1},bonuses).value,2.42,"Live talent changes apply on next calculation")
+GetAttackPowerForStat=function(index,value) return 100+value*(index==1 and 2 or 0) end
+close(calculate("strength",{attackPower=1},bonuses).value,2.42,"Native AP increment M is not multiplied twice")
+GetSpellCritChanceFromStat=function(_,value) return .05+value*.001 end
+stats[4]=19.5
+local intBonuses=calculate("intellect",{mana=1,crit=2},bonuses)
+close(intBonuses.value,11.15+0.121*2,"1.21 effective Intellect crosses first20 exactly")
+close(calculate("mana",{intellect=intBonuses.value,crit=2},bonuses).value,1,"Mana inverse accounts for Kings and Divine Intellect")
+close(calculate("intellect",{mana=1},{kings=true,useTalents=false}).value,9.5,"Kings crossing first20 differs from scaling old +1 rate")
+stats[3]=19.5
+local staBonus=calculate("stamina",{health=2},{kings=true,useTalents=false}).value
+close(staBonus,13)
+close(calculate("health",{stamina=staBonus},{kings=true,useTalents=false}).value,2,"Health inverse includes identical Kings threshold interval")
+stats[3]=19
+close(calculate("stamina",{health=1},bonuses).value,1+0.144*10,"Sacred Duty multiplies with Kings once across threshold")
+stats[5]=49.5
+local spiritBonus=calculate("spirit",{mp5=2},{kings=true,castingShare=0}).value
+close(spiritBonus,2,"Kings Spirit interval spans both sides of50")
+close(calculate("mp5",{spirit=spiritBonus},{kings=true,combatShare=0,castingShare=0}).value,2,"MP5 inverse uses raw Spirit bonus interval")
+local savedOptions=FW:GetDerivedWeightDefaults({calculationOptions={kings=true,useTalents=false}})
+equal(savedOptions.kings,true); equal(savedOptions.useTalents,false)
+C_Traits=nil
+local unreadable=FW:GetDerivedWeightOptions("strength",{attackPower=1},{useTalents=true})
+equal(unreadable.available,false,"Selected current-talent calculation requires a readable rank")
+check(unreadable.params.useTalents,"User can uncheck unavailable talent reading")
+close(calculate("strength",{attackPower=1},{useTalents=false}).value,2,"Unchecking talents permits explicit base-only fallback")
+reset("DRUID")
+form=1
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=node==104939 and 5 or node==104911 and 3 or 0} end
+close(calculate("strength",{attackPower=1},bonuses).value,2.42,"Druid Cat Heart of the Wild affects Strength")
+form=5
+close(calculate("strength",{attackPower=1},bonuses).value,2.2,"Heart of the Wild Strength is Cat-only")
+close(calculate("stamina",{health=1},bonuses).value,13.2,"Bear Stamina uses20% Heart of the Wild")
+stats[5]=100
+close(calculate("spirit",{mp5=1},{kings=true,castingShare=0}).value,.625*1.1*1.15,"Living Spirit and Kings multiply once")
+GetShapeshiftFormID=nil
+equal(FW:GetDerivedWeightOptions("stamina",{health=1},bonuses).available,false,"Unknown Druid form cannot claim current talent conversion")
+reset("HUNTER")
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=node==110859 and 5 or 0} end
+close(calculate("agility",{rangedAttackPower=1},bonuses).value,2.42,"Hunter Lightning Reflexes is class-specific")
+reset("MAGE")
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=node==105800 and 5 or 0} end
+close(calculate("intellect",{mana=1},bonuses).value,18.15,"Mage Arcane Mind affects Intellect")
+LOCALIZED_CLASS_NAMES_MALE={MAGE="Mage localised"}
+check(calculate("intellect",{mana=1},bonuses).contextText:find("Mage localised",1,true))
 
 reset()
 local draft={attackPower=0.2,crit=10,mp5=2}

@@ -658,9 +658,11 @@ equal(catalogCalls, 4, "profile and editor refreshes do not reload the icon cata
 -- Weight calculators read the current draft and require the normal Apply action.
 UnitLevel = function() return 29 end
 UnitStat = function() return 100, 100, 0, 0 end
-local talentRank = 3
+local talentRank, strengthTalentRank, intellectTalentRank = 3, 0, 0
 C_ClassTalents = { GetActiveConfigID = function() return 1 end }
-C_Traits = { GetNodeInfo = function(_, node) return { activeRank = node == 110871 and talentRank or 0 } end }
+C_Traits = { GetNodeInfo = function(_, node)
+    return { activeRank = node == 110871 and talentRank or node == 105328 and strengthTalentRank or node == 105332 and intellectTalentRank or 0 }
+end }
 local function gear(key)
     return find(function(control) return control.isDerivedWeight and control.statKey == key end)
 end
@@ -668,24 +670,94 @@ local calculationProfile = assert(FW:CreateProfile("Calculated profile", {}))
 find(function(control) return control.kind == "Button" and control.profileID == calculationProfile.id end):Fire("OnClick")
 userText(weightBox("Attack power"), "3")
 userText(weightBox("Block value"), "4")
-local calculatorLines = {}
-GameTooltip.SetOwner = function() end
-GameTooltip.SetText = function(_, title) tooltipTitle = title end
+local calculatorLines, calculatorDoubleLines, calculatorWidths = {}, {}, {}
+local calculationTooltipOwner, calculationTooltipHides
+GameTooltip.SetOwner = function(_, owner) calculationTooltipOwner = owner end
+GameTooltip.GetOwner = function() return calculationTooltipOwner end
+GameTooltip.IsOwned = function(_, owner) return calculationTooltipOwner == owner end
+GameTooltip.Hide = function() calculationTooltipHides = (calculationTooltipHides or 0) + 1 end
+GameTooltip.SetText = function(_, title) tooltipTitle = title calculatorLines, calculatorDoubleLines = {}, {} end
 GameTooltip.AddLine = function(_, line) calculatorLines[#calculatorLines + 1] = line end
+GameTooltip.AddDoubleLine = function(_, left, right, ...)
+    calculatorLines[#calculatorLines + 1] = left .. ": " .. right
+    calculatorDoubleLines[#calculatorDoubleLines + 1] = { left = left, right = right, colors = { ... } }
+end
+GameTooltip.SetMinimumWidth = function(_, width, reflow) calculatorWidths[#calculatorWidths + 1] = { width, reflow } end
 gear("strength"):Fire("OnEnter")
-equal(tooltipTitle, "Calculate Strength weight", "gear tooltip identifies the target attribute")
-check(table.concat(calculatorLines, "\n"):find("PALADIN", 1, true), "gear tooltip includes player class")
+equal(tooltipTitle, "Calculate Strength", "gear tooltip identifies the target attribute")
+check(table.concat(calculatorLines, "\n"):lower():find("paladin", 1, true), "gear tooltip includes player class")
 check(table.concat(calculatorLines, "\n"):find("29", 1, true), "gear tooltip includes player level")
 check(table.concat(calculatorLines, "\n"):find("Attack power", 1, true), "gear tooltip names the input weights")
+equal(calculatorWidths[#calculatorWidths][1], 400, "calculation tooltip uses a spacious fixed minimum width")
+equal(calculatorWidths[#calculatorWidths][2], true, "calculation tooltip reflows wrapped text to its width")
+local calculatedCount, footerCount = 0, 0
+for _, line in ipairs(calculatorLines) do
+    if line:find("Calculated weight", 1, true) then calculatedCount = calculatedCount + 1 end
+    if line:find("Click", 1, true) then footerCount = footerCount + 1 end
+end
+equal(calculatedCount, 1, "calculation tooltip shows its result once")
+equal(footerCount, 1, "calculation tooltip gives one short action footer")
+check(#calculatorDoubleLines >= 2, "calculation tooltip aligns input formulas and the result in separate columns")
+check(table.concat(calculatorLines, "\n"):find("From your weights", 1, true), "calculation tooltip separates source weights from prose")
+check(table.concat(calculatorLines, "\n"):find("Formula", 1, true), "calculation tooltip gives the formula its own section")
+check(table.concat(calculatorLines, "\n"):find("Data source", 1, true), "calculation tooltip separates conversion provenance")
+local resultColumn
+for _, columns in ipairs(calculatorDoubleLines) do if columns.left == "Calculated weight" then resultColumn = columns end end
+check(resultColumn and resultColumn.colors[2] > resultColumn.colors[1], "calculation tooltip highlights the final result in green")
+gear("strength"):Fire("OnLeave")
+equal(calculatorWidths[#calculatorWidths][1], 0, "leaving a calculation gear restores the shared tooltip width")
+equal(calculatorWidths[#calculatorWidths][2], false, "width cleanup releases forced wrapping")
+gear("strength"):Fire("OnEnter")
+local stolenWidths, stolenHides = #calculatorWidths, calculationTooltipHides
+GameTooltip:SetOwner(UIParent, "ANCHOR_RIGHT")
+gear("strength"):Fire("OnHide")
+equal(#calculatorWidths, stolenWidths, "gear cleanup leaves another tooltip owner's layout alone")
+equal(calculationTooltipHides, stolenHides, "gear cleanup never hides another owner's tooltip")
 gear("strength"):Fire("OnClick")
+local calculationDialog = ZwykValuesWeightCalculation
+check(calculationDialog and calculationDialog:IsShown(), "primary attribute gear opens the bonus prompt")
+check(calculationDialog.toggles.kings:IsShown() and not calculationDialog.toggles.kings:GetChecked(), "primary bonus prompt offers optional Kings disabled by default")
+check(calculationDialog.toggles.useTalents:IsShown() and calculationDialog.toggles.useTalents:GetChecked(), "primary bonus prompt defaults to current talents")
+check(not calculationDialog.sliders[1]:IsShown() and not calculationDialog.sliders[2]:IsShown(), "primary bonus prompt omits regeneration ratios")
+calculationDialog.use:Fire("OnClick")
 check(math.abs(tonumber(strength:GetText()) - 6.2) < 0.000001, "gear calculates from unsaved source weights")
 equal(calculationProfile.weights.strength, 0, "gear leaves saved weights unchanged")
 FW:RefreshUI()
 check(math.abs(tonumber(strength:GetText()) - 6.2) < 0.000001, "refresh preserves the calculated draft")
+strengthTalentRank = 3
+gear("strength"):Fire("OnClick")
+calculationDialog.toggles.useTalents:Fire("OnEnter")
+check(table.concat(calculatorLines, "\n"):find("Divine Strength 3/5", 1, true), "talent bonus checkbox explains the current talent rank")
+calculationDialog.toggles.kings:SetChecked(true)
+calculationDialog.toggles.kings:Fire("OnClick")
+calculationDialog.use:Fire("OnClick")
+check(math.abs(tonumber(strength:GetText()) - 7.2292) < 0.000001, "primary bonus prompt applies Kings and current talents once")
+equal(calculationProfile.calculationOptions, nil, "accepted stat bonuses remain draft assumptions")
+gear("strength"):Fire("OnClick")
+check(calculationDialog.toggles.kings:GetChecked(), "reopening the bonus prompt retains the draft Kings setting")
+calculationDialog.toggles.kings:SetChecked(false)
+calculationDialog.toggles.kings:Fire("OnClick")
+calculationDialog.toggles.useTalents:SetChecked(false)
+calculationDialog.toggles.useTalents:Fire("OnClick")
+calculationDialog.use:Fire("OnClick")
+check(math.abs(tonumber(strength:GetText()) - 6.2) < 0.000001, "unchecked bonus settings restore the base conversion")
+strengthTalentRank = 5
+gear("strength"):Fire("OnClick")
+check(not calculationDialog.toggles.kings:GetChecked() and not calculationDialog.toggles.useTalents:GetChecked(), "false bonus settings survive draft refreshes")
+calculationDialog.toggles.useTalents:Fire("OnEnter")
+check(table.concat(calculatorLines, "\n"):find("Divine Strength 5/5", 1, true), "reopening the bonus prompt reads current talents again")
+calculationDialog.cancel:Fire("OnClick")
+gear("dps"):Fire("OnClick")
+equal(tonumber(weightBox("Melee weapon DPS"):GetText()), 42, "melee DPS gear uses the draft attack power weight")
+userText(weightBox("Intellect"), "45")
+gear("mana"):Fire("OnClick")
+check(calculationDialog:IsShown() and calculationDialog.toggles.kings:IsShown(), "Mana inverse calculation opens the stat bonus prompt")
+check(calculationDialog.toggles.useTalents:IsShown(), "Mana inverse calculation offers current Intellect talent bonuses")
+calculationDialog.use:Fire("OnClick")
+equal(tonumber(weightBox("Mana"):GetText()), 3, "Mana gear fills the inverse Intellect conversion")
 local spirit, mp5 = weightBox("Spirit"), weightBox("Mana per 5 seconds")
 userText(mp5, "4")
 gear("spirit"):Fire("OnClick")
-local calculationDialog = ZwykValuesWeightCalculation
 check(calculationDialog:IsShown(), "Spirit gear opens a regeneration prompt")
 check(not calculationDialog.sliders[1]:IsShown(), "Spirit prompt omits combat share")
 equal(calculationDialog.sliders[2]:GetValue(), 80, "Spirit prompt starts with a visible casting assumption")
@@ -728,6 +800,8 @@ check(math.abs(calculationProfile.weights.spirit - 0.75) < 0.000001, "Apply save
 equal(calculationProfile.calculationOptions.combatShare, 0, "Apply saves chosen combat ratio")
 equal(calculationProfile.calculationOptions.castingShare, 1, "Apply saves chosen casting ratio")
 equal(calculationProfile.calculationOptions.whileCastingRegen, 0, "Apply saves chosen retained regeneration")
+equal(calculationProfile.calculationOptions.kings, false, "Apply preserves an explicitly disabled Kings bonus")
+equal(calculationProfile.calculationOptions.useTalents, false, "Apply preserves explicitly disabled talent bonuses")
 gear("spirit"):Fire("OnClick")
 equal(calculationDialog.sliders[3]:GetValue(), 0, "saved user regeneration overrides talent defaults")
 local staleCalculation = calculationDialog.use:GetScript("OnClick")
@@ -909,6 +983,8 @@ local function separate(first, second, message)
     local ax, ay, aw, ah = second:Rect()
     check(x + width <= ax or ax + aw <= x or y + height <= ay or ay + ah <= y, message)
 end
+gear("mp5"):Fire("OnClick")
+check(calculationDialog.sliders[1]:IsShown() and calculationDialog.toggles.kings:IsShown(), "minimum-size checks include the full regeneration and Kings prompt")
 for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     FW.UI:SetSize(table.unpack(dimensions))
     FW.UI:Fire("OnSizeChanged")
@@ -945,11 +1021,32 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
         within(slider.caption, calculationDialog, "regeneration ratio label fits its prompt")
         separate(slider, calculationDialog.detailsScroll, "sliders leave room for conversion details")
     end
-    for _, key in ipairs({ "strength", "agility", "stamina", "intellect", "spirit", "mp5", "defense" }) do
+    for _, control in pairs(calculationDialog.toggles) do
+        if control:IsShown() then
+            within(control, calculationDialog, "bonus checkbox fits its calculation prompt")
+            within(control.caption, calculationDialog, "bonus checkbox caption fits its prompt")
+            separate(control.caption, calculationDialog.detailsScroll, "bonus checkbox leaves room for calculation details")
+            for _, slider in ipairs(calculationDialog.sliders) do
+                if slider:IsShown() then separate(control.caption, slider.caption, "bonus checkboxes leave room for regeneration labels") end
+            end
+        end
+    end
+    for _, key in ipairs({ "strength", "agility", "stamina", "intellect", "spirit", "mp5", "mana", "dps", "rangedDps", "armor", "defense" }) do
         local control = gear(key)
         within(control, control.parent, "calculation gear fits the attribute row")
         local fieldLabel = control.parent.children[1]
         separate(control, fieldLabel, "calculation gear leaves room for the attribute label")
+        local box
+        for _, child in ipairs(control.parent.children) do if child.kind == "EditBox" then box = child end end
+        local anchor, relative, relativeAnchor, offset = control:GetPoint()
+        equal(anchor, "RIGHT", "calculation gear anchors by its right edge")
+        equal(relative, box, "calculation gear is next to the numeric value")
+        equal(relativeAnchor, "LEFT", "calculation gear appears just before the numeric value")
+        equal(offset, -6, "calculation gear keeps a small gap before the numeric value")
+        local labelAnchor, _, _, labelOffset = fieldLabel:GetPoint()
+        equal(labelAnchor, "LEFT", "stat labels retain their left alignment")
+        equal(labelOffset, 0, "stat labels have no gear indentation")
+        separate(control, box, "calculation gear leaves the numeric value unobstructed")
         check(control:GetScript("OnUpdate") == nil, "calculation gear performs no per-frame work")
     end
     within(iconDialog.search, iconDialog, "icon search fits the picker")

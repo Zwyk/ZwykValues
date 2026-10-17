@@ -1,5 +1,5 @@
 local _, FW = ...
-local MAX_ITEMS, PARSER_VERSION = 2000, 9
+local MAX_ITEMS, PARSER_VERSION = 2000, 10
 local recentItems, recentCount, recentCache, recentEquipment = {}, 0, nil, nil
 local metadataRetries = setmetatable({}, {__mode="k"})
 local onUseRetries = setmetatable({}, {__mode="k"})
@@ -161,7 +161,7 @@ end
 local absolute = {
     ITEM_MOD_STRENGTH_SHORT = "strength", ITEM_MOD_AGILITY_SHORT = "agility",
     ITEM_MOD_STAMINA_SHORT = "stamina", ITEM_MOD_INTELLECT_SHORT = "intellect",
-    ITEM_MOD_SPIRIT_SHORT = "spirit", ITEM_MOD_HEALTH_SHORT = "health",
+    ITEM_MOD_SPIRIT_SHORT = "spirit", ITEM_MOD_HEALTH_SHORT = "health", ITEM_MOD_MANA_SHORT = "mana",
     ITEM_MOD_HEALTH_REGENERATION_SHORT = "hp5", ITEM_MOD_HEALTH_REGEN_SHORT = "hp5",
     ITEM_MOD_MANA_REGENERATION_SHORT = "mp5", ITEM_MOD_MANA_REGEN_SHORT = "mp5",
     ITEM_MOD_POWER_REGEN0_SHORT = "mp5",
@@ -204,7 +204,7 @@ end
 -- Known, deliberately out-of-schema values are reported separately, not
 -- treated as an unknown Forever field. They cannot acquire an accidental weight.
 local ignored = {
-    ITEM_MOD_MANA_SHORT = true, ITEM_MOD_RESILIENCE_RATING_SHORT = true,
+    ITEM_MOD_RESILIENCE_RATING_SHORT = true,
     ITEM_MOD_MASTERY_RATING_SHORT = true, ITEM_MOD_VERSATILITY = true,
     ITEM_MOD_VERSATILITY_RATING_SHORT = true, ITEM_MOD_CR_AVOIDANCE_SHORT = true,
     ITEM_MOD_CR_LIFESTEAL_SHORT = true, ITEM_MOD_CR_SPEED_SHORT = true,
@@ -541,6 +541,7 @@ local labels = {
     strength = { "strength", "force" }, agility = { "agility", "agilité" },
     stamina = { "stamina", "endurance" }, intellect = { "intellect", "intelligence" },
     spirit = { "spirit", "esprit" }, health = { "health", "points de vie", "vie" },
+    mana = { "mana", "points de mana", "maximum mana", "mana maximum" },
     spellDamage = { "spell damage", "dégâts des sorts" }, healing = { "healing", "soins" },
     spellPen = { "spell penetration", "pénétration des sorts" },
     attackPower = { "attack power", "puissance d'attaque" },

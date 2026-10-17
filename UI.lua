@@ -371,13 +371,18 @@ local function weightCalculation(field, options, quiet)
         { available = false, reason = "This weight could not be calculated." }
 end
 
-local function useCalculatedWeight(field, result, options)
+local function useCalculatedWeight(field, result, options, params)
     if not selectedProfile() or not result.available or not finite(result.value) then return end
     UI.loading = true
     field.box:SetText(string.format("%.8g", result.value))
     UI.loading = false
     if options then
-        UI.draftCalculationOptions = { combatShare = options.combatShare, castingShare = options.castingShare, whileCastingRegen = options.whileCastingRegen }
+        local draft = {}
+        for key, value in pairs(UI.draftCalculationOptions or {}) do draft[key] = value end
+        for _, key in ipairs({ "combatShare", "castingShare", "whileCastingRegen", "kings", "useTalents" }) do
+            if params and params[key] then draft[key] = options[key] end
+        end
+        UI.draftCalculationOptions = draft
     end
     UI.dirtyWeights = true
     UI.weightState:SetText("Unsaved weights")
@@ -385,9 +390,100 @@ local function useCalculatedWeight(field, result, options)
     status(field.label .. " weight calculated. Apply weights to update item scores.")
 end
 
+local calculationColors = {
+    context = { 0.65, 0.78, 0.94 }, heading = { 0.78, 0.85, 1 },
+    text = { 0.94, 0.94, 0.94 }, detail = { 0.72, 0.77, 0.84 },
+    result = { 0.45, 0.92, 0.63 }, warning = { 1, 0.65, 0.4 },
+}
+local function calculationNumber(value)
+    return finite(value) and string.format("%.5g", value) or "?"
+end
+local function hasCalculationParams(result)
+    for _, enabled in pairs(result.params or {}) do if enabled then return true end end
+    return false
+end
+
+-- The engine supplies structured data; use the same sections in the hover
+-- tooltip and the regeneration prompt instead of repeating its diagnostic log.
+local function calculationSections(field, result, withFooter)
+    local sections = {}
+    local function line(text, color, right)
+        if text and text ~= "" then sections[#sections + 1] = { text = text, color = calculationColors[color or "text"], right = right } end
+    end
+    local function space()
+        if #sections > 0 and sections[#sections].text ~= " " then line(" ") end
+    end
+    local function heading(text) space() line(text, "heading") end
+    local function unique(values, color)
+        local seen = {}
+        for _, value in ipairs(values or {}) do
+            if type(value) == "string" and value ~= "" and not seen[value] then
+                seen[value] = true
+                line(value, value:lower():find("fallback", 1, true) and "warning" or color)
+            end
+        end
+    end
+    line(result.contextText, "context")
+    local structured = result.formula or result.contributions or result.assumptions or result.provenance
+    if structured then
+        if result.formula and result.formula ~= "" then heading("Formula") line(result.formula) end
+        if result.contributions and #result.contributions > 0 then
+            heading("From your weights")
+            for _, contribution in ipairs(result.contributions) do
+                line(contribution.label or contribution.key, "text", calculationNumber(contribution.rate) .. (contribution.unit or "") ..
+                    " x " .. calculationNumber(contribution.weight) .. " = " .. calculationNumber(contribution.value))
+            end
+        end
+    else
+        local lines = {}
+        for _, text in ipairs(result.lines or {}) do
+            if type(text) == "string" and text ~= result.reason and not text:match("^Calculated weight:") and not text:match("^Click") then lines[#lines + 1] = text end
+        end
+        unique(lines, "text")
+    end
+    space()
+    if result.available and finite(result.value) then
+        line("Calculated weight", "result", calculationNumber(result.value))
+    else
+        line(result.reason or "Calculation unavailable.", "warning")
+    end
+    if structured then
+        if result.assumptions and #result.assumptions > 0 then heading("Assumptions") unique(result.assumptions, "detail") end
+        if result.provenance and #result.provenance > 0 then heading("Data source") unique(result.provenance, "detail") end
+    end
+    if withFooter then
+        space()
+        line((field.key == "spirit" or field.key == "mp5") and "Click to choose ratios. Apply weights saves changes." or
+            (hasCalculationParams(result) and "Click to review bonuses. Apply weights saves changes." or
+                (result.footer or "Click to fill this weight. Apply weights saves changes.")), "context")
+    end
+    return sections
+end
+
+local function calculationText(field, result)
+    local lines = {}
+    for _, section in ipairs(calculationSections(field, result, false)) do
+        local color = section.color
+        lines[#lines + 1] = string.format("|cff%02x%02x%02x", math.floor(color[1] * 255), math.floor(color[2] * 255), math.floor(color[3] * 255)) ..
+            section.text .. (section.right and (": " .. section.right) or "") .. "|r"
+    end
+    return lines
+end
+
+local function hideCalculationTooltip(owner)
+    if not UI or not UI.calculationTooltipOwner or (owner and UI.calculationTooltipOwner ~= owner) then return end
+    local tooltipOwner = UI.calculationTooltipOwner
+    UI.calculationTooltipOwner = nil
+    if GameTooltip.IsOwned and not GameTooltip:IsOwned(tooltipOwner) then return end
+    if GameTooltip.GetOwner and GameTooltip:GetOwner() ~= tooltipOwner then return end
+    if GameTooltip.SetMinimumWidth then GameTooltip:SetMinimumWidth(0, false) end
+    GameTooltip:Hide()
+end
+
 local function showCalculationPrompt(field)
     local profile = selectedProfile()
     if not profile then return end
+    hideCalculationTooltip()
     closeProfileDialogs()
     if not UI.calculationDialog then
         local dialog = CreateFrame("Frame", "ZwykValuesWeightCalculation", UI.frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
@@ -405,7 +501,7 @@ local function showCalculationPrompt(field)
         dialog.help:SetPoint("TOPRIGHT", -18, -45)
         dialog.help:SetHeight(42)
         dialog.help:SetJustifyV("TOP")
-        dialog.sliders = {}
+        dialog.sliders, dialog.toggles = {}, {}
         dialog.detailsScroll = CreateFrame("ScrollFrame", "ZwykValuesCalculationDetails", dialog, "UIPanelScrollFrameTemplate")
         dialog.detailsScroll:SetPoint("TOPLEFT", 18, -280)
         dialog.detailsScroll:SetPoint("BOTTOMRIGHT", -37, 62)
@@ -425,9 +521,12 @@ local function showCalculationPrompt(field)
     end
     local dialog = UI.calculationDialog
     local session = { profile = profile, field = field, options = calculationOptions(profile) }
+    local initialResult = weightCalculation(field, session.options, true)
+    session.params = initialResult.params or {}
     UI.calculationSession = session
     dialog.title:SetText("Calculate " .. field.label .. " weight")
-    dialog.help:SetText("Ratios describe time spent regenerating mana. Calculated weights stay unsaved until you click Apply weights.")
+    dialog.help:SetText((session.params.castingShare and "Adjust regeneration ratios and stat bonuses." or "Choose the stat bonuses to include.") ..
+        " Calculated weights stay unsaved until Apply weights.")
     local definitions = {
         { key = "combatShare", text = "Time in combat", help = "Out of combat uses full Spirit regeneration; time in combat uses the casting assumptions below." },
         { key = "castingShare", text = "Time while casting", help = "Share of time affected by the five-second mana regeneration rule. For MP5 this applies only to time in combat." },
@@ -437,8 +536,11 @@ local function showCalculationPrompt(field)
         if UI.calculationSession ~= session then return end
         session.result = weightCalculation(field, session.options, true)
         local result = session.result
-        local lines = { result.available and finite(result.value) and string.format("Calculated weight: %.8g", result.value) or (result.reason or "Calculation unavailable.") }
-        for _, line in ipairs(result.lines or {}) do lines[#lines + 1] = line end
+        for key, control in pairs(dialog.toggles) do
+            if result.paramLabels and result.paramLabels[key] then control.caption:SetText(result.paramLabels[key]) end
+            if control.hintTitle then hint(control, control.hintTitle, result.paramHelp and result.paramHelp[key] or control.defaultHint) end
+        end
+        local lines = calculationText(field, result)
         dialog.details:SetText(table.concat(lines, "\n"))
         local lineCount = 0
         for _, line in ipairs(lines) do lineCount = lineCount + math.max(1, math.ceil(#line * 6.2 / 465)) end
@@ -449,7 +551,38 @@ local function showCalculationPrompt(field)
         dialog.detailsScroll:UpdateScrollChildRect()
         setEnabled(dialog.use, result.available and finite(result.value))
     end
-    local row = 0
+    local nextY = 102
+    for _, definition in ipairs({
+        { key = "kings", text = "Include Blessing of Kings (+10%)", help = "Multiply the relevant primary stat by 1.10. The bonus is applied once, including inverse calculations." },
+        { key = "useTalents", text = "Use current talents", help = "Use the relevant talents from your current specialization. Talent ranks are read again when calculating; profile settings do not save a rank." },
+    }) do
+        local control = dialog.toggles[definition.key]
+        if not control then
+            control = CreateFrame("CheckButton", nil, dialog, "UICheckButtonTemplate")
+            control:SetSize(24, 24)
+            control.caption = label(control, "", 11, { 0.85, 0.89, 0.94 })
+            control.caption:SetPoint("LEFT", control, "RIGHT", 3, 0)
+            control.caption:SetWidth(438)
+            control.caption:SetHeight(32)
+            dialog.toggles[definition.key] = control
+        end
+        control.optionKey = definition.key
+        control.hintTitle, control.defaultHint = definition.text, definition.help
+        control:SetShown(session.params[definition.key] and true or false)
+        if session.params[definition.key] then
+            control:ClearAllPoints()
+            control:SetPoint("TOPLEFT", 21, -nextY)
+            nextY = nextY + 40
+            control.caption:SetText(initialResult.paramLabels and initialResult.paramLabels[definition.key] or definition.text)
+            control:SetChecked(session.options[definition.key] and true or false)
+            control:SetScript("OnClick", function(self)
+                if UI.calculationSession ~= session then return end
+                session.options[definition.key] = self:GetChecked() and true or false
+                refresh()
+            end)
+            hint(control, definition.text, initialResult.paramHelp and initialResult.paramHelp[definition.key] or definition.help)
+        end
+    end
     for index, definition in ipairs(definitions) do
         local slider = dialog.sliders[index]
         if not slider then
@@ -467,12 +600,12 @@ local function showCalculationPrompt(field)
             dialog.sliders[index] = slider
         end
         slider.optionKey = definition.key
-        local shown = field.key == "mp5" or definition.key ~= "combatShare"
+        local shown = session.params[definition.key] and true or false
         slider:SetShown(shown)
         if shown then
-            row = row + 1
             slider:ClearAllPoints()
-            slider:SetPoint("TOPLEFT", 25, -(110 + (row - 1) * 57))
+            slider:SetPoint("TOPLEFT", 25, -(nextY + 13))
+            nextY = nextY + 57
             local function caption(value) slider.caption:SetText(definition.text .. ": " .. math.floor(value + 0.5) .. "%") end
             slider:SetScript("OnValueChanged", nil)
             local percent = math.max(0, math.min(100, (tonumber(session.options[definition.key]) or 0) * 100))
@@ -487,11 +620,16 @@ local function showCalculationPrompt(field)
             hint(slider, definition.text, definition.help)
         end
     end
+    local detailsTop = nextY + 10
+    dialog:SetHeight(math.max(400, detailsTop + 180))
+    dialog.detailsScroll:ClearAllPoints()
+    dialog.detailsScroll:SetPoint("TOPLEFT", 18, -detailsTop)
+    dialog.detailsScroll:SetPoint("BOTTOMRIGHT", -37, 62)
     dialog.use:SetScript("OnClick", function()
         if UI.calculationSession ~= session or selectedProfile() ~= profile then return end
         refresh()
         if session.result.available and finite(session.result.value) then
-            useCalculatedWeight(field, session.result, session.options)
+            useCalculatedWeight(field, session.result, session.options, session.params)
             closeProfileDialogs()
         end
     end)
@@ -505,26 +643,32 @@ local function installCalculationButton(field)
     field.calculate = control
     control.isDerivedWeight, control.statKey = true, field.key
     control:SetSize(16, 16)
-    control:SetPoint("LEFT", 0, 0)
+    control:SetPoint("RIGHT", field.box, "LEFT", -6, 0)
     control:SetNormalTexture("Interface\\Buttons\\UI-OptionsButton")
     control:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
-    field.text:ClearAllPoints()
-    field.text:SetPoint("LEFT", 21, 0)
     control:SetScript("OnEnter", function(self)
         local result = weightCalculation(field, nil, true)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Calculate " .. field.label .. " weight", 1, 0.82, 0)
-        for _, line in ipairs(result.lines or {}) do GameTooltip:AddLine(line, 0.9, 0.9, 0.9, true) end
-        if not result.available then GameTooltip:AddLine(result.reason or "Calculation unavailable.", 1, 0.5, 0.35, true)
-        elseif finite(result.value) then GameTooltip:AddLine(string.format("Calculated weight: %.8g", result.value), 0.45, 0.9, 0.6, true) end
-        GameTooltip:AddLine((field.key == "spirit" or field.key == "mp5") and "Click to set regeneration assumptions, then use the calculated weight." or
-            "Click to fill this weight from your current draft weights. Apply weights to save it.", 0.7, 0.8, 0.95, true)
+        GameTooltip:SetText(result.title or ("Calculate " .. field.label .. " weight"), 1, 0.82, 0)
+        for _, section in ipairs(calculationSections(field, result, true)) do
+            local color = section.color
+            if section.right and GameTooltip.AddDoubleLine then
+                GameTooltip:AddDoubleLine(section.text, section.right, color[1], color[2], color[3], color[1], color[2], color[3])
+            else
+                GameTooltip:AddLine(section.text .. (section.right and (": " .. section.right) or ""), color[1], color[2], color[3], true)
+            end
+        end
+        UI.calculationTooltipOwner = self
+        -- Native FrameXML uses the second argument to reflow wrapped text to
+        -- the requested minimum width. Reset it when this tooltip is released.
+        if GameTooltip.SetMinimumWidth then GameTooltip:SetMinimumWidth(400, true) end
         GameTooltip:Show()
     end)
-    control:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    control:SetScript("OnLeave", function(self) hideCalculationTooltip(self) end)
+    control:SetScript("OnHide", function(self) hideCalculationTooltip(self) end)
     control:SetScript("OnClick", function()
-        if field.key == "spirit" or field.key == "mp5" then showCalculationPrompt(field) return end
         local result = weightCalculation(field, nil, false)
+        if hasCalculationParams(result) then showCalculationPrompt(field) return end
         if result.available and finite(result.value) then useCalculatedWeight(field, result)
         else status(result.reason or "This weight could not be calculated.", "error") end
     end)
@@ -790,6 +934,7 @@ end
 local function selectProfile(id, reveal)
     closeColorPicker(true)
     closeIconPicker()
+    hideCalculationTooltip()
     closeProfileDialogs()
     UI.selectedID = id
     UI.revealSelected = reveal
@@ -1496,6 +1641,7 @@ local function createUI()
     frame:SetScript("OnHide", function()
         closeColorPicker(true)
         closeIconPicker()
+        hideCalculationTooltip()
         closeProfileDialogs()
         if UI.dialog then UI.dialog:Hide() end
         if UI.filterDialog then UI.filterDialog:Hide() end

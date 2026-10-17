@@ -149,8 +149,8 @@ local spellCritPerIntellect = {
 critPerAgility.SHAMAN[24] = nil
 
 local derived = { strength=true, agility=true, stamina=true, intellect=true,
-    spirit=true, mp5=true, health=true, attackPower=true, rangedAttackPower=true,
-    feralAttackPower=true, defense=true }
+    spirit=true, mp5=true, health=true, mana=true, attackPower=true, rangedAttackPower=true,
+    dps=true, rangedDps=true, armor=true, feralAttackPower=true, defense=true }
 local manaClasses = { PALADIN=true, HUNTER=true, PRIEST=true, SHAMAN=true,
     MAGE=true, WARLOCK=true, DRUID=true }
 local strengthAP = { WARRIOR=2, PALADIN=2, HUNTER=1, ROGUE=1,
@@ -161,6 +161,20 @@ local castingTalents = {
     MAGE = { node=105803, name="Arcane Meditation", rates={0.17,0.33,0.50} },
     DRUID = { node=104917, name="Reflection", rates={0.17,0.33,0.50} },
     HUNTER = { node=104963, name="Bestial Discipline", rates={0.25,0.50} },
+}
+local primaryTalents = {
+    PALADIN={strength={{node=105328,name="Divine Strength",rates={.02,.04,.06,.08,.10}}},
+        intellect={{node=105332,name="Divine Intellect",rates={.02,.04,.06,.08,.10}}},
+        stamina={{node=105632,name="Sacred Duty",rates={.02,.04}}}},
+    DRUID={spirit={{node=104911,name="Living Spirit",rates={.05,.10,.15}}},
+        intellect={{node=104939,name="Heart of the Wild",rates={.02,.04,.06,.08,.10}}},
+        strength={{node=104939,name="Heart of the Wild",rates={.02,.04,.06,.08,.10},form="cat"}},
+        stamina={{node=104939,name="Heart of the Wild",rates={.04,.08,.12,.16,.20},form="bear"}}},
+    HUNTER={agility={{node=110859,name="Lightning Reflexes",rates={.02,.04,.06,.08,.10}}}},
+    MAGE={intellect={{node=105800,name="Arcane Mind",rates={.02,.04,.06,.08,.10}}}},
+    PRIEST={intellect={{node=105837,name="Mental Strength",rates={.03,.06,.09,.12,.15}}}},
+    SHAMAN={stamina={{node=104746,name="Toughness",rates={.02,.04,.06,.08,.10}}},
+        intellect={{node=104756,name="Ancestral Knowledge",rates={.02,.04,.06,.08,.10}}}},
 }
 local unpack = unpack or table.unpack
 local function pack(...) return { n=select("#", ...), ... } end
@@ -184,14 +198,20 @@ local function effectiveStat(index)
     if finite(base) then return base end
 end
 local function context(options)
-    local _, class=call(UnitClass, "player")
+    local className, class=call(UnitClass, "player")
     local level=call(UnitLevel, "player")
     local actualClass, actualLevel=class, level
     if readable(options.class) and type(options.class)=="string" then class=options.class end
     if finite(options.level) then level=options.level end
     if not readable(class) or type(class)~="string" then class=nil end
     if not finite(level) or level<1 or level~=math.floor(level) then level=nil end
-    return { class=class, level=level, live=readable(actualClass) and finite(actualLevel)
+    local names=LOCALIZED_CLASS_NAMES_MALE
+    local localized=type(names)=="table" and class and names[class]
+    if readable(localized) and type(localized)=="string" then className=localized
+    elseif not readable(actualClass) or class~=actualClass or not readable(className) or type(className)~="string" or className==class then
+        className=class and (class:sub(1,1) .. class:sub(2):lower()) or nil
+    end
+    return { class=class, className=className, level=level, live=readable(actualClass) and finite(actualLevel)
         and class==actualClass and level==actualLevel }
 end
 local function traitRank(node)
@@ -208,8 +228,8 @@ local function traitRank(node)
 end
 
 function FW:GetDerivedWeightDefaults(profile)
-    local defaults={ combatShare=1, castingShare=0.8, whileCastingRegen=0,
-        regenSource="No learned casting-regeneration talent was available; adjust if needed." }
+    local defaults={ combatShare=1, castingShare=0.8, whileCastingRegen=0, kings=false, useTalents=true,
+        regenSource="Casting-regeneration talent data is unavailable; adjust if needed." }
     local current=context({})
     local talent=current.class and castingTalents[current.class]
     local rank=talent and traitRank(talent.node)
@@ -224,28 +244,70 @@ function FW:GetDerivedWeightDefaults(profile)
         for _, key in ipairs({"combatShare","castingShare","whileCastingRegen"}) do
             if finite(saved[key]) then defaults[key]=ratio(saved[key], defaults[key]) end
         end
+        for _, key in ipairs({"kings","useTalents"}) do
+            if readable(saved[key]) and type(saved[key])=="boolean" then defaults[key]=saved[key] end
+        end
         if finite(saved.whileCastingRegen) then defaults.regenSource="Saved casting-regeneration setting." end
     end
     return defaults
+end
+
+local function primaryMultiplier(ctx, key, options, defaults)
+    local primary=({health="stamina",mana="intellect",mp5="spirit"})[key] or key
+    if primary~="strength" and primary~="agility" and primary~="stamina" and primary~="intellect" and primary~="spirit" then
+        return 1, nil
+    end
+    local kings=defaults.kings
+    if readable(options.kings) and type(options.kings)=="boolean" then kings=options.kings end
+    -- Unlike 'x and false or default', this preserves an explicit false.
+    local useTalents=defaults.useTalents
+    if readable(options.useTalents) and type(options.useTalents)=="boolean" then useTalents=options.useTalents end
+    local multiplier=kings and 1.1 or 1
+    local data={primary=primary,kings=kings,useTalents=useTalents,bonuses={},summaries={},supported=false}
+    local models=primaryTalents[ctx.class] and primaryTalents[ctx.class][primary]
+    local form=ctx.live and call(GetShapeshiftFormID)
+    for _, model in ipairs(models or {}) do
+        if model.form and not finite(form) then
+            data.supported=true
+            data.summaries[#data.summaries+1]=model.name .. ": current form unavailable"
+            if useTalents then data.unavailable="Current form is unavailable for " .. model.name .. ". Uncheck talent bonuses to use base conversions." end
+        end
+        local applies=not model.form or (finite(form) and ((model.form=="cat" and form==1) or (model.form=="bear" and (form==5 or form==8))))
+        if applies then
+            data.supported=true
+            local rank=ctx.live and traitRank(model.node)
+            local rate=rank and (rank==0 and 0 or model.rates[rank])
+            if finite(rate) then
+                data.summaries[#data.summaries+1]=model.name .. " " .. rank .. "/" .. #model.rates .. " (+" .. number(rate*100) .. "%)"
+                if useTalents then multiplier=multiplier*(1+rate); data.bonuses[#data.bonuses+1]={name=model.name,rate=rate,rank=rank} end
+            else
+                data.summaries[#data.summaries+1]=model.name .. ": current rank unavailable"
+                if useTalents then data.unavailable="Current rank is unavailable for " .. model.name .. ". Uncheck talent bonuses to use base conversions." end
+            end
+        end
+    end
+    data.multiplier=multiplier
+    return multiplier,data
 end
 
 function FW:IsDerivedWeightStat(key) return derived[key]==true end
 
 -- The new Forever APIs accept a stat value. Taking a one-point difference
 -- avoids folding a base crit chance or a flat AP bonus into a marginal rate.
-local function marginal(fn, statIndex, ctx, scale)
+local function marginal(fn, statIndex, ctx, scale, increment)
     if not ctx.live then return end
     local stat=effectiveStat(statIndex)
     if not finite(stat) or stat<0 then return end
-    local before, after=call(fn, statIndex, stat), call(fn, statIndex, stat+1)
+    local before, after=call(fn, statIndex, stat), call(fn, statIndex, stat+(increment or 1))
     if finite(before) and finite(after) then
         local result=(after-before)*(scale or 1)
         if finite(result) and result>=0 then return result end
     end
 end
-local function critRate(statIndex, ctx)
+local function critRate(statIndex, ctx, increment)
+    increment=increment or 1
     local fn=statIndex==2 and GetCritChanceFromStat or GetSpellCritChanceFromStat
-    local rate=marginal(fn, statIndex, ctx, 100)
+    local rate=marginal(fn, statIndex, ctx, 100, increment)
     if rate then return rate, "Live client, " .. ctx.class .. " level " .. ctx.level end
     -- Older clients expose only the crit contribution of the current stat.
     -- A total-stat ratio is safe only for the APIs named 'FromAgility/Intellect',
@@ -255,49 +317,124 @@ local function critRate(statIndex, ctx)
         local old=statIndex==2 and GetCritChanceFromAgility or GetSpellCritChanceFromIntellect
         local total=call(old, "player")
         if finite(stat) and stat>0 and finite(total) and total>=0 then
-            return total/stat, "Live client stat contribution, " .. ctx.class .. " level " .. ctx.level
+            return total/stat*increment, "Live client stat contribution, " .. ctx.class .. " level " .. ctx.level
         end
     end
     local tableForClass=(statIndex==2 and critPerAgility or spellCritPerIntellect)[ctx.class]
     rate=tableForClass and tableForClass[ctx.level]
-    if finite(rate) then return rate, "Vanilla fallback, " .. ctx.class .. " level " .. ctx.level .. " (RatingBuster)" end
+    if finite(rate) then return rate*increment, "Vanilla fallback, " .. ctx.class .. " level " .. ctx.level .. " (RatingBuster)" end
 end
-local function attackRate(statIndex, ranged, ctx)
-    local rate=marginal(ranged and GetRangedAttackPowerForStat or GetAttackPowerForStat, statIndex, ctx)
+local function attackRate(statIndex, ranged, ctx, increment)
+    increment=increment or 1
+    local rate=marginal(ranged and GetRangedAttackPowerForStat or GetAttackPowerForStat, statIndex, ctx, nil, increment)
     if rate then return rate, "Live client" end
-    if statIndex==1 then return ranged and 0 or strengthAP[ctx.class], "Forever base conversion (RatingBuster)" end
+    if statIndex==1 then return ranged and 0 or strengthAP[ctx.class]*increment, "Forever base conversion (RatingBuster)" end
     if statIndex==2 then
-        if ranged then return ctx.class=="HUNTER" and 2 or ((ctx.class=="WARRIOR" or ctx.class=="ROGUE") and 1 or 0), "Forever base conversion (RatingBuster)" end
+        if ranged then return (ctx.class=="HUNTER" and 2 or ((ctx.class=="WARRIOR" or ctx.class=="ROGUE") and 1 or 0))*increment, "Forever base conversion (RatingBuster)" end
         if ctx.class=="DRUID" and ctx.live then
             local form=call(GetShapeshiftFormID)
             if not finite(form) then return nil, "Druid form was unavailable." end
-            return form==1 and 1 or 0, "Vanilla fallback, current druid form"
+            return form==1 and increment or 0, "Vanilla fallback, current druid form"
         end
-        return (ctx.class=="HUNTER" or ctx.class=="ROGUE") and 1 or 0, "Forever base conversion (RatingBuster)"
+        return (ctx.class=="HUNTER" or ctx.class=="ROGUE") and increment or 0, "Forever base conversion (RatingBuster)"
     end
     return 0, "Base conversion; talent stat conversions are not included"
 end
-local function healthRate(ctx)
+local function healthRate(ctx, increment)
+    increment=increment or 1
     local stamina=ctx.live and effectiveStat(3)
     if not finite(stamina) then return end
     local rate=ctx.live and call(UnitHPPerStamina, "player")
     local native=finite(rate) and rate>0
     if not native then rate=10 end
-    local below=math.max(0, math.min(1, 20-stamina))
-    return below+(1-below)*rate, (native and "Live client" or "Vanilla fallback") .. ", first 20 Stamina give one Health each."
+    local below=math.max(0, math.min(increment, 20-stamina))
+    return below+(increment-below)*rate, (native and "Live client" or "Vanilla fallback") .. ", first 20 Stamina give one Health each."
+end
+
+local function manaRate(ctx, increment)
+    increment=increment or 1
+    local intellect=ctx.live and effectiveStat(4)
+    if not finite(intellect) then return end
+    -- Forever's native character sheet still uses these two constants, with
+    -- one Mana per Intellect for the first 20 points. A +1 difference also
+    -- handles fractional attributes crossing that breakpoint.
+    local breakpoint=finite(INTELLECT_BREAK) and INTELLECT_BREAK>0 and INTELLECT_BREAK or 20
+    local perIntellect=finite(MANA_PER_INTELLECT) and MANA_PER_INTELLECT>0 and MANA_PER_INTELLECT or 15
+    local below=math.max(0, math.min(increment, breakpoint-intellect))
+    return below+(increment-below)*perIntellect, "Forever client constants: first " .. number(breakpoint) .. " Intellect give one Mana each, then " .. number(perIntellect) .. "."
+end
+
+local function attackPowerPerDPS()
+    if finite(ATTACK_POWER_MAGIC_NUMBER) and ATTACK_POWER_MAGIC_NUMBER>0 then
+        return ATTACK_POWER_MAGIC_NUMBER, "Forever client constants: AP to autoattack DPS."
+    end
+    return 14, "Forever client constants: 14 AP = 1 autoattack DPS."
+end
+
+local function armorRate(ctx, options)
+    if not ctx.live then return nil, nil, "Armor conversion requires the current character." end
+    local _, armor=call(UnitArmor, "player")
+    if not finite(armor) or armor<0 then return nil, nil, "Current effective Armor is unavailable." end
+    local level=options.attackerLevel
+    if not readable(level) then return nil, nil, "Attacker level is unavailable." end
+    if level==nil then
+        level=call(UnitEffectiveLevel, "player")
+        if not finite(level) or level<1 then level=ctx.level end
+    end
+    if not finite(level) or level<1 or level~=math.floor(level) then return nil, nil, "Attacker level must be a positive whole number." end
+    local fn=C_PaperDollInfo and C_PaperDollInfo.GetArmorEffectiveness
+    if type(fn)~="function" then return nil, nil, "The Forever Armor mitigation API is unavailable." end
+    local before, after=call(fn, armor, level), call(fn, armor+1, level)
+    if not finite(before) or not finite(after) or before<0 or after<before or after>1 then
+        return nil, nil, "The Forever Armor mitigation API did not return a readable conversion."
+    end
+    return (after-before)*100, "Live Forever Armor mitigation API", nil,
+        { armor=armor, attackerLevel=level, reduction=before*100 }
+end
+
+local function sourceLabel(source)
+    if not source then return end
+    if source:find("Forever Armor",1,true) then return "Live Forever Armor API" end
+    if source:find("Live client",1,true) then return "Live game API" end
+    if source:find("Forever client constants",1,true) then return "Forever client constants" end
+    if source:find("Vanilla",1,true) then return "Vanilla fallback" end
+    if source:find("RatingBuster",1,true) then return "Forever: RatingBuster" end
+    if source:find("effective MP5",1,true) then return "Regeneration equivalence" end
+    if source:find("feral AP",1,true) then return "Classic feral AP conversion" end
+    return "Base class conversion"
 end
 
 function FW:GetDerivedWeightOptions(key, weights, options)
     options=type(options)=="table" and options or {}
     weights=type(weights)=="table" and weights or {}
     local ctx=context(options)
-    local result={ key=key, available=false, value=0, lines={}, sources={}, params={}, context=ctx }
+    local definition=FW.StatByKey and FW.StatByKey[key]
+    local label=definition and definition.label or key
+    local result={ key=key, available=false, value=0, lines={}, sources={}, params={}, context=ctx,
+        title="Calculate " .. tostring(label), contextText=ctx.className and ctx.level and (ctx.className .. " · level " .. ctx.level) or "",
+        formula="", assumptions={}, provenance={}, footer="Click to fill the draft. Apply saves changes." }
+    result.contributions=result.sources
+    local defaults=self:GetDerivedWeightDefaults()
+    local increment, modifiers=primaryMultiplier(ctx, key, options, defaults)
+    result.modifiers=modifiers
+    result.paramLabels={}
+    result.paramHelp={}
+    if modifiers then
+        result.params.kings=true
+        result.params.useTalents=modifiers.supported
+        result.paramLabels.kings="Blessing of Kings (+10% primary stats)"
+        result.paramLabels.useTalents="Apply talent stat bonuses"
+        result.talentSummary=table.concat(modifiers.summaries, "; ")
+        result.paramHelp.useTalents=result.talentSummary~="" and result.talentSummary or "No verified talent bonus for this stat."
+        result.options={kings=modifiers.kings,useTalents=modifiers.useTalents}
+    end
     if not derived[key] then result.reason="No reliable direct conversion is available for this attribute."; return result end
     if not ctx.class or not strengthAP[ctx.class] or not ctx.level then
         result.reason="Player class and level are not available yet."; return result
     end
-    local failed=false
+    local failed, seenSources=false, {}
     local function line(value) result.lines[#result.lines+1]=value end
+    local function assume(value) result.assumptions[#result.assumptions+1]=value; line(value) end
     local function fail(message) failed=true; result.reason=result.reason or message; line(message) end
     local function weight(stat)
         local value=weights[stat]
@@ -317,53 +454,98 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         local value=sourceWeight*rate
         if not finite(value) then fail("The calculated weight is outside the supported numeric range."); return end
         result.value=result.value+value
-        result.sources[#result.sources+1]={ key=stat, weight=sourceWeight, rate=rate, value=value, provenance=source }
+        result.sources[#result.sources+1]={ key=stat, label=label, weight=sourceWeight, rate=rate, value=value, unit=suffix, provenance=source }
         line(number(rate) .. (suffix or "") .. " " .. label .. " × weight " .. number(sourceWeight) .. " = " .. number(value))
-        if source then line(source) end
+        if source then
+            line(source)
+            local readableSource=sourceLabel(source)
+            if not seenSources[readableSource] then
+                result.provenance[#result.provenance+1]=readableSource
+                seenSources[readableSource]=true
+            end
+        end
     end
     local function addAttack(statIndex)
-        local ap, source=attackRate(statIndex, false, ctx)
+        local ap, source=attackRate(statIndex, false, ctx, increment)
         add("attackPower", ap, source)
-        local ranged, rangedSource=attackRate(statIndex, true, ctx)
+        local ranged, rangedSource=attackRate(statIndex, true, ctx, increment)
         add("rangedAttackPower", ranged, rangedSource)
     end
+    local function addIntellectOther(scale)
+        local ap, source=attackRate(4, false, ctx, increment)
+        add("attackPower", ap and ap*scale, source)
+        local ranged, rangedSource=attackRate(4, true, ctx, increment)
+        add("rangedAttackPower", ranged and ranged*scale, rangedSource)
+        local crit, critSource=critRate(4, ctx, increment)
+        add("crit", crit and crit*scale, critSource, "%")
+    end
     line(ctx.class .. " · level " .. ctx.level .. "; weight per 1 " .. (FW.StatByKey and FW.StatByKey[key] and FW.StatByKey[key].label or key))
+    if modifiers then
+        assume("1 item " .. modifiers.primary .. " adds " .. number(increment) .. " effective " .. modifiers.primary .. ".")
+        if modifiers.kings then assume("Kings: +10%; primary-stat bonuses multiply once with talent bonuses.") end
+        if modifiers.supported then
+            assume((modifiers.useTalents and "Current talents: " or "Talent stat bonuses excluded: ") .. result.talentSummary)
+            if modifiers.useTalents and not modifiers.unavailable then
+                result.provenance[#result.provenance+1]="Current talent ranks"
+                seenSources["Current talent ranks"]=true
+            end
+        end
+        if modifiers.unavailable then fail(modifiers.unavailable) end
+    end
     if key=="strength" then
         addAttack(1)
         if ctx.class=="WARRIOR" or ctx.class=="PALADIN" or ctx.class=="SHAMAN" then
-            add("blockValue", 0.05, ctx.class=="SHAMAN" and "Vanilla fallback: 20 Strength = 1 shield block value."
+            add("blockValue", 0.05*increment, ctx.class=="SHAMAN" and "Vanilla fallback: 20 Strength = 1 shield block value."
                 or "Forever base conversion (RatingBuster)")
         end
     elseif key=="agility" then
         addAttack(2)
-        add("armorBonus", 2, "Vanilla fallback: armor gained from agility is bonus armor.")
-        local rate, source=critRate(2, ctx)
+        add("armorBonus", 2*increment, "Vanilla fallback: armor gained from agility is bonus armor.")
+        local rate, source=critRate(2, ctx, increment)
         add("crit", rate, source, "%")
         -- Dodge is a separate conversion: never divide total dodge (which
         -- includes base chance and defense) by agility.
         local fallback=critPerAgility[ctx.class] and critPerAgility[ctx.class][ctx.level]
-        add("dodge", fallback and fallback*((ctx.class=="HUNTER" or ctx.class=="ROGUE") and 2 or 1),
+        add("dodge", fallback and fallback*((ctx.class=="HUNTER" or ctx.class=="ROGUE") and 2 or 1)*increment,
             "Vanilla fallback dodge table, class and level", "%")
     elseif key=="stamina" then
-        local rate, source=healthRate(ctx)
+        local rate, source=healthRate(ctx, increment)
         add("health", rate, source)
+        assume("First 20 Stamina give 1 Health each; later points use the current Health conversion.")
     elseif key=="health" then
-        local rate, source=healthRate(ctx)
+        local rate, source=healthRate(ctx, increment)
         add("stamina", rate and 1/rate, source)
+        assume("Uses the next Stamina point at your current Stamina; the first 20 have a different rate.")
     elseif key=="intellect" then
-        addAttack(4)
         if manaClasses[ctx.class] then
-            local rate, source=critRate(4, ctx)
-            add("crit", rate, source, "%")
-            line("Mana pool is not included: this profile has no Mana weight.")
+            local mana, manaSource=manaRate(ctx, increment)
+            add("mana", mana, manaSource)
+            addIntellectOther(1)
+            assume("Mana conversion uses the next Intellect point; temporary maximum-Mana modifiers are not included.")
+            assume("First 20 Intellect give 1 Mana each; later points use the client Mana-per-Intellect constant.")
+        else addAttack(4) end
+    elseif key=="mana" then
+        if not manaClasses[ctx.class] then fail("This class does not use mana.")
+        else
+            local mana, manaSource=manaRate(ctx, increment)
+            if not finite(mana) or mana<=0 then fail("Current Intellect is unavailable; Mana per Intellect cannot be checked.")
+            else
+                add("intellect", 1/mana, manaSource)
+                addIntellectOther(-1/mana)
+                result.formula="Mana = (Intellect - its other modeled contributions) / " .. number(mana)
+                assume("Subtracts Intellect's crit and native AP contributions before converting the remaining weight to Mana.")
+                assume("Temporary maximum-Mana modifiers are not included.")
+                assume("Uses the next Intellect point, including the first-20 breakpoint.")
+                if result.value<0 then assume("Other Intellect contributions exceed its weight; inferred Mana weight is negative.") end
+            end
         end
     elseif key=="spirit" or key=="mp5" then
-        local defaults=self:GetDerivedWeightDefaults()
         local combat=ratio(options.combatShare, defaults.combatShare)
         local casting=ratio(options.castingShare, defaults.castingShare)
         local regen=ratio(options.whileCastingRegen, defaults.whileCastingRegen)
-        result.params={ castingShare=true, whileCastingRegen=true, combatShare=key=="mp5" }
-        result.options={ combatShare=combat, castingShare=casting, whileCastingRegen=regen }
+        result.params.castingShare,result.params.whileCastingRegen,result.params.combatShare=true,true,key=="mp5"
+        result.options=result.options or {}
+        result.options.combatShare,result.options.castingShare,result.options.whileCastingRegen=combat,casting,regen
         if not manaClasses[ctx.class] then fail("This class does not use mana.")
         else
             local spirit=ctx.live and effectiveStat(5)
@@ -372,28 +554,70 @@ function FW:GetDerivedWeightOptions(key, weights, options)
                 -- Integrate the next point across the 50-Spirit breakpoint.
                 -- A fractional stat near the breakpoint must not get the
                 -- entire point priced at the rate on either side.
-                local below=math.max(0, math.min(1, 50-spirit))
-                local base=below*1.25+(1-below)*0.625
+                local below=math.max(0, math.min(increment, 50-spirit))
+                local base=below*1.25+(increment-below)*0.625
                 local castingMultiplier=(1-casting)+casting*regen
                 local multiplier=key=="spirit" and castingMultiplier or ((1-combat)+combat*castingMultiplier)
                 local effective=base*multiplier
+                if not seenSources["Forever: RatingBuster"] then
+                    result.provenance[#result.provenance+1]="Forever: RatingBuster"
+                    seenSources["Forever: RatingBuster"]=true
+                end
+                result.contextText=result.contextText .. " · " .. number(spirit) .. " Spirit"
                 line("Next 1 Spirit = " .. number(base) .. " MP5 before casting reductions (Forever / RatingBuster; breakpoint 50 Spirit).")
                 line(number(casting*100) .. "% while casting; " .. number(regen*100) .. "% Spirit regeneration retained while casting.")
                 line("Casting-regeneration default: " .. defaults.regenSource .. " Chosen value is shown above.")
+                assume(number(casting*100) .. "% under the casting rule; " .. number(regen*100) .. "% Spirit regeneration retained.")
+                assume("Before casting reductions, next 1 Spirit gives " .. number(base) .. " MP5 (breakpoint: 50 Spirit).")
+                assume("Casting-regeneration default: " .. defaults.regenSource)
                 if key=="mp5" then
                     line(number(combat*100) .. "% in combat; casting share applies during that combat time.")
+                    assume(number(combat*100) .. "% in combat; casting share applies during combat.")
                     if effective<=0 then fail("Spirit gives no mana at these ratios; an MP5 weight cannot be inferred. Reduce casting/combat time or increase retained regeneration.")
                     else add("spirit", 1/effective, "MP5 = Spirit weight ÷ effective MP5 per Spirit.") end
                 else add("mp5", effective, "Spirit = MP5 weight × effective MP5 per Spirit.") end
-                line("Mana regeneration only; health regeneration and other talent stat conversions are not included.")
+                assume("Mana regeneration only; health regeneration and other talent conversions are excluded.")
             end
         end
     elseif key=="attackPower" then
-        add("dps", 1/14, "Vanilla fallback: 14 melee AP = 1 autoattack DPS; special attacks are not modeled.")
+        local ap, source=attackPowerPerDPS()
+        add("dps", 1/ap, source)
+        assume("Autoattack approximation: " .. number(ap) .. " AP equals 1 DPS; special attacks are not modeled.")
+    elseif key=="dps" then
+        local ap, source=attackPowerPerDPS()
+        add("attackPower", ap, source)
+        assume("Autoattack approximation: 1 DPS equals " .. number(ap) .. " AP. Special attacks and feral weapon mechanics are not modeled.")
     elseif key=="rangedAttackPower" then
         if ctx.class=="WARRIOR" or ctx.class=="HUNTER" or ctx.class=="ROGUE" then
-            add("rangedDps", 1/14, "Vanilla fallback: 14 ranged AP = 1 bow/gun autoattack DPS; wands are excluded.")
+            local ap, source=attackPowerPerDPS()
+            add("rangedDps", 1/ap, source)
+            assume("Bow/gun autoattacks only: " .. number(ap) .. " ranged AP equals 1 ranged DPS. Wands are excluded.")
         else fail("This class cannot use an AP-scaled ranged weapon.") end
+    elseif key=="rangedDps" then
+        if ctx.class=="WARRIOR" or ctx.class=="HUNTER" or ctx.class=="ROGUE" then
+            local ap, source=attackPowerPerDPS()
+            add("rangedAttackPower", ap, source)
+            assume("Bow/gun autoattacks only: 1 ranged DPS equals " .. number(ap) .. " ranged AP. Wands are excluded.")
+        else fail("This class cannot use an AP-scaled ranged weapon.") end
+    elseif key=="armor" then
+        local rate, source, failure, armorContext=armorRate(ctx, options)
+        if failure then fail(failure)
+        else
+            result.armorContext=armorContext
+            result.contextText=result.contextText .. " · " .. number(armorContext.armor) .. " Armor · attacker level " .. armorContext.attackerLevel
+            add("dodge", rate, source, "%")
+            result.formula="Armor = Dodge x " .. number(rate) .. " percentage points of damage reduction"
+            -- add() deliberately skips zero rates. At the cap retain the
+            -- native provenance and an explicit zero contribution instead.
+            if rate==0 then
+                result.sources[#result.sources+1]={key="dodge",label="Dodge",rate=0,weight=weight("dodge"),value=0,unit="%",provenance=source}
+                result.provenance[#result.provenance+1]="Live Forever Armor API"
+                assume("The next Armor point adds no reduction at these values, including at the mitigation cap.")
+            end
+            assume("Treats 1 percentage point of physical damage reduction as worth 1 percentage point of Dodge.")
+            assume("Assumes 1 base Armor adds 1 effective Armor; form/talent Armor multipliers are not included.")
+            assume("Current Armor and the selected attacker level set the conversion; this does not equate spell avoidance.")
+        end
     elseif key=="feralAttackPower" then
         if ctx.class=="DRUID" then add("attackPower", 1, "One feral AP acts as one AP in cat/bear form.")
         else fail("Feral attack power applies only to druids in cat/bear form.") end
@@ -408,13 +632,21 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         if ctx.class=="WARRIOR" or ctx.class=="PALADIN" or ctx.class=="SHAMAN" then
             add("block", 0.04, "Vanilla fallback: one defense skill point, when using a shield.", "%")
         end
-        line("Reduced enemy hit/crit chance has no matching profile weight and is not included.")
+        assume("Reduced enemy hit/crit chance has no matching profile weight and is not included.")
     end
     if not finite(result.value) then fail("The calculated weight is outside the supported numeric range.") end
     result.available=not failed
+    if result.formula=="" then
+        local terms={}
+        for _, contribution in ipairs(result.contributions) do
+            local prefix=#terms>0 and (contribution.rate<0 and " - " or " + ") or (contribution.rate<0 and "-" or "")
+            terms[#terms+1]=prefix .. number(math.abs(contribution.rate)) .. " x " .. contribution.label
+        end
+        result.formula=tostring(label) .. " = " .. (#terms>0 and table.concat(terms) or "0")
+    end
     if result.available then line("Calculated weight: " .. number(result.value)) end
     if key=="strength" or key=="agility" or key=="stamina" or key=="intellect" then
-        line("Fallbacks use base conversions; talent effects absent from the live APIs are not included.")
+        assume("Other talent effects beyond supported stat bonuses and native conversions are not included.")
     end
     line("Click once to copy this value into the draft; Apply saves it. Recalculate after a level/form change.")
     return result

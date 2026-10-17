@@ -53,6 +53,7 @@ local default = FW:GetProfiles()[1]
 equal(default.name, "My profile")
 equal(default.secondaryUnit, "percent")
 equal(default.icon, nil, "profiles start without an optional icon")
+equal(default.weights.mana, 0, "Mana starts at zero without a guessed resource weight")
 equal(#FW:GetProfiles(true), 1)
 for _, definition in ipairs(FW.StatDefinitions) do equal(default.weights[definition.key], 0) end
 
@@ -114,9 +115,17 @@ equal(keyCount, #FW.StatDefinitions, "exports retain every zero-weight stat")
 local imported, importError, warnings = FW:ImportProfile(bare, "Imported")
 check(imported, importError)
 equal(imported.weights.strength, 3)
+equal(imported.weights.mana, 0, "older bare weight objects default a missing Mana weight to zero")
 equal(imported.name, "Imported")
 equal(imported.icon, nil, "bare weights do not inherit display metadata")
 check(#warnings > 0, "bare imports explain unit assumptions")
+local oldResourceProfile = assert(FW:ImportProfile('{"intellect":2}', "Older resources"))
+equal(oldResourceProfile.weights.mana, 0, "profiles without the new resource key remain valid")
+assert(FW:UpdateProfile(oldResourceProfile.id, {weights={mana=0.25}}))
+equal(FW:ScoreStats(oldResourceProfile, {mana=100,intellect=3}), 31, "flat Mana and Intellect have separate weights")
+local manaExport = assert(FW:ExportProfile(oldResourceProfile.id))
+equal(assert(json.Decode(manaExport)).weights.mana, 0.25)
+equal(assert(FW:ImportProfile(manaExport)).weights.mana, 0.25, "Mana weights round-trip in full profiles")
 assert(FW:UpdateProfile(profile.id, { secondaryUnit = "rating", active = false }))
 equal(profile.secondaryUnit, "percent", "legacy update requests cannot enable rating mode")
 local envelope = assert(FW:ExportProfile(profile.id))
@@ -429,19 +438,50 @@ equal(#FW:GetUpgradeProfiles(), 2, "reload retains independent upgrade activatio
 local optionProfile = FW.DB.profiles[firstUpgrade.id]
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={combatShare=0,castingShare=1}}))
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={whileCastingRegen=0.3}}))
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={kings=false,useTalents=true}}))
 equal(optionProfile.calculationOptions.combatShare, 0, "partial calculation preference changes retain other ratios")
 equal(optionProfile.calculationOptions.castingShare, 1)
 equal(optionProfile.calculationOptions.whileCastingRegen, 0.3)
+equal(optionProfile.calculationOptions.kings, false, "an explicit Kings opt-out is preserved")
+equal(optionProfile.calculationOptions.useTalents, true, "talent modifiers can be enabled without storing character ranks")
+local calculationRevision = optionProfile.revision
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={castingShare=0.8}}))
+equal(optionProfile.calculationOptions.kings, false, "ratio edits retain the Kings choice")
+equal(optionProfile.calculationOptions.useTalents, true, "ratio edits retain talent assumptions")
+equal(optionProfile.revision, calculationRevision, "calculator assumptions do not change a weight until Apply")
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={castingShare=1}}))
 local optionCopy = assert(FW:CopyProfile(optionProfile.id))
 optionCopy.calculationOptions.combatShare = 0.6
 equal(optionProfile.calculationOptions.combatShare, 0, "copies do not share calculator preferences")
+equal(optionCopy.calculationOptions.kings, false, "copies preserve an explicit Kings opt-out")
+equal(optionCopy.calculationOptions.useTalents, true)
+assert(FW:UpdateProfile(optionCopy.id, {calculationOptions={kings=true,useTalents=false}}))
+equal(optionCopy.calculationOptions.kings, true)
+equal(optionCopy.calculationOptions.useTalents, false, "an explicit talent opt-out is supported")
+equal(optionProfile.calculationOptions.useTalents, true, "copies own their talent preferences")
 local optionImport = assert(FW:ImportProfile(assert(FW:ExportProfile(optionProfile.id))))
 equal(optionImport.calculationOptions.castingShare, 1, "calculator ratios round-trip with full profiles")
+equal(optionImport.calculationOptions.kings, false, "Kings opt-outs round-trip with full profiles")
+equal(optionImport.calculationOptions.useTalents, true)
+local optionsOffImport = assert(FW:ImportProfile(assert(FW:ExportProfile(optionCopy.id))))
+equal(optionsOffImport.calculationOptions.kings, true)
+equal(optionsOffImport.calculationOptions.useTalents, false, "talent opt-outs survive profile exchange")
 for _, badOptions in ipairs({{combatShare=-0.1},{castingShare=1.1},{whileCastingRegen="30"},
-    {unknown=0.5}, json.null, {combatShare=math.huge}}) do
+    {unknown=0.5}, json.null, {combatShare=math.huge}, {kings=1}, {kings="true"}, {kings=json.null},
+    {useTalents=1}, {useTalents="false"}, {useTalents=json.null}, {divineStrengthRank=5}}) do
     equal(FW:UpdateProfile(optionProfile.id, {name="Must not change",calculationOptions=badOptions}), nil)
     equal(optionProfile.name, oldName, "invalid calculator preferences remain atomic")
 end
+local invalidOptionEnvelope = assert(json.Decode(assert(FW:ExportProfile(optionProfile.id))))
+invalidOptionEnvelope.calculationOptions.kings = "true"
+local beforeInvalidImport = #FW:GetProfiles()
+equal(FW:ImportProfile(assert(json.Encode(invalidOptionEnvelope))), nil, "imports validate Kings assumptions before creating profiles")
+equal(#FW:GetProfiles(), beforeInvalidImport)
+FW.DB = nil
+FW:Initialize()
+optionProfile = FW.DB.profiles[optionProfile.id]
+equal(optionProfile.calculationOptions.kings, false, "reload preserves an explicit Kings choice")
+equal(optionProfile.calculationOptions.useTalents, true, "reload preserves the talent preference without freezing ranks")
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions=false}))
 equal(optionProfile.calculationOptions, nil, "clearing preferences restores live calculator defaults")
 

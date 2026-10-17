@@ -1,8 +1,8 @@
-# ZwykValues 0.1.21
+# ZwykValues 0.1.22
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
-Version 0.1.21 replaces the comparison picker's selected-row character with a native check-mark texture so it displays with the game's fonts.
+Version 0.1.22 adds Mana, reciprocal weight calculations and optional stat modifiers. Calculation gears now sit immediately to the left of their value boxes, and their tooltips separate the formula, input weights, result and assumptions. The comparison picker retains the native check-mark texture added in 0.1.21.
 
 ## Installation
 
@@ -57,7 +57,7 @@ Secondary weights always use percentages; there is no rating mode:
 | --- | --- |
 | `hit`, `crit`, `haste`, `expertise`, `dodge`, `parry`, `block` | Weight per percentage point; 1% means an amount of 1 |
 | `defense` | Weight per defense skill point, when explicitly available |
-| Primary stats, AP, spell/healing power, armor, resistances, health | Weight per stat point |
+| Primary stats, AP, spell/healing power, armor, resistances, health, mana | Weight per stat point |
 | `hp5`, `mp5` | Weight per regeneration point per 5 seconds |
 | `dps`, `rangedDps` | Weight per damage per second |
 | `lowDamage`, `highDamage` | Weight per minimum/maximum weapon damage |
@@ -80,15 +80,23 @@ Version 0.1.16 reads elemental wand damage ranges and the client's school-damage
 
 ## Calculate weights from other weights
 
-A small gear before a supported attribute opens its calculation or fills its draft weight. Hover the gear to see the source weights, conversion rates, class, level and data source. These buttons calculate **weights**; they do not add derived stats to items or run during item hover. Review the result and click **Apply weights** to save it. Recalculate after a level or form change.
+A small gear immediately left of a supported value box opens its calculation or fills its draft weight. Hover the gear to see a wider, structured tooltip with the formula, source weights, result, assumptions and data source. These buttons calculate **weights**; they do not add derived stats to items or run during item hover. Review the result and click **Apply weights** to save it. Recalculate after a level, form, talent or planned-buff change.
 
-Supported relationships include Strength from attack power and shield block value, Agility from attack power/armor/critical strike/dodge, Stamina from Health, Intellect from spell critical strike and any native attack-power conversion, Spirit from MP5, and the reverse Health/MP5 conversions. Attack-power helpers can also use autoattack DPS weights; their tooltip explains the limited autoattack model. Defense includes the supported avoidance/block weights, rather than an invented value for reduced enemy critical strikes.
+Supported relationships include Strength from attack power and shield block value, Agility from attack power/armor/critical strike/dodge, Stamina from Health, Intellect from Mana/spell critical strike/native attack-power conversions, Spirit from MP5, and the reverse Health/Mana/MP5 conversions. Mana is a separate resource weight, distinct from MP5. Old profiles start with a zero Mana weight. Native and English/French flat-Mana item stats and enchants are recognized; restoring Mana is not treated as a permanent flat-Mana bonus.
 
-Native Forever conversion functions take priority and use the difference between the current stat and one additional point. Where they are unavailable, the helper identifies its Forever base coefficient or class/level Vanilla fallback. The fallback crit tables cover levels 1–60; an unavailable weighted conversion prevents applying the result. These conversions are separate from item secondary-stat parsing: item weights remain per **1 percentage point**, and raw rating still receives no guessed conversion.
+Mana and Intellect calculations use the next item-stat point and account for the first-20-Intellect breakpoint. The reverse Mana calculation subtracts Intellect's other modeled contributions before dividing by its Mana gain. If those other contributions already exceed the chosen Intellect weight, the inferred Mana weight can be negative; the tooltip explains this.
 
-**Spirit** opens sliders for time affected by the five-second casting rule and the percentage of Spirit regeneration retained while casting. The initial retained-regeneration value is read from the active talent configuration when possible, including Paladin Reverence. **MP5** also asks for time in combat; its inverse calculation assumes full Spirit regeneration out of combat and applies the casting assumptions during combat. Chosen ratios save with Apply weights. Spirit's mana-regeneration coefficient uses the current Spirit breakpoint. A zero effective Spirit regeneration rate cannot infer an MP5 weight, so the dialog explains why that calculation is unavailable. Intellect's mana-pool value and Spirit's health regeneration are omitted because the current schema cannot express those resource/time assumptions reliably.
+Relevant calculation dialogs offer **Blessing of Kings (+10%)** and **talent stat bonuses**. Kings is optional; talent bonuses default to the current active spec. Verified current ranks are read again when calculating, rather than saved as stale rank overrides. If a required rank is unreadable, the calculation waits until it is available or you turn off talent stat bonuses. For Paladins this includes Divine Strength and Divine Intellect at 2% per point, plus the supported Stamina bonus. Kings and talent bonuses multiply: Kings with a 10% talent bonus gives a 1.21 multiplier. The same settings apply in the reverse calculations, including Mana to Intellect and Health to Stamina. These choices and regeneration ratios remain drafts until Apply weights.
 
-Conversion references: [Forever character-stat UI](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_UIPanels_Game/Camelot/PaperDollFrameStats.lua), [RatingBuster's Forever conversion data](https://github.com/raethkcj/RatingBuster/blob/905c14184527e0466c85b1d180bcd62d875fd4dd/libs/StatLogic/CamelotLogic.lua), and [Forever Equipment Manager APIs](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/EquipmentManagerDocumentation.lua). The addon has no runtime dependency on these sources.
+Weapon DPS also calculates from attack power: the native autoattack conversion is normally 14 AP per DPS, so an AP weight of 0.1 produces a DPS weight of 1.4. The reverse AP calculation uses the same coefficient. Ranged equivalents apply to AP-scaled ranged weapons, excluding wands. These are autoattack equivalences, not rotation simulations.
+
+Base Armor can calculate from the Dodge weight using the requested assumption that one percentage point of Dodge has the same value as one percentage point of physical damage reduction from Armor. It asks the native Forever mitigation API for the gain from the next effective Armor point at your current effective Armor against a same-level attacker. The tooltip shows that baseline. This is a local estimate: it assumes one base Armor point adds one effective Armor point, does not model form/talent Armor multipliers, and does not treat Dodge and Armor as equivalent against every attack. An unreadable native mitigation API makes this calculation unavailable instead of substituting an unverified Armor formula.
+
+Native Forever conversion functions take priority and use the difference for the additional stat point. Where they are unavailable, the helper identifies its verified base coefficient or class/level Vanilla fallback. The fallback crit tables cover levels 1–60; an unavailable weighted conversion prevents applying the result. The gear tooltip identifies supported talent bonuses and limitations. These conversions are separate from item secondary-stat parsing: item weights remain per **1 percentage point**, and raw rating still receives no guessed conversion.
+
+**Spirit** offers sliders for time affected by the five-second casting rule and the percentage of Spirit regeneration retained while casting. The initial retained-regeneration value is read from the active talent configuration when possible, including Paladin Reverence. **MP5** also asks for time in combat; its inverse calculation assumes full Spirit regeneration out of combat and applies the casting assumptions during combat. Spirit's mana-regeneration coefficient uses the current Spirit breakpoint and any selected primary-stat modifiers. A zero effective Spirit regeneration rate cannot infer an MP5 weight, so the dialog explains why that calculation is unavailable. Spirit's health regeneration remains outside this calculation.
+
+Conversion references: [Forever character-stat UI](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_UIPanels_Game/Camelot/PaperDollFrameStats.lua), [RatingBuster's Forever conversion data](https://github.com/raethkcj/RatingBuster/blob/905c14184527e0466c85b1d180bcd62d875fd4dd/libs/StatLogic/CamelotLogic.lua), [Forever Armor API](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/PaperDollInfoDocumentation.lua), and [Forever Equipment Manager APIs](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/EquipmentManagerDocumentation.lua). The addon has no runtime dependency on these sources.
 
 ## Tooltip comparisons
 
@@ -144,7 +152,7 @@ Native Blizzard bag, bank, trade, vendor, auction-house, loot and loot-roll wind
 
 Other third-party bag addons can integrate their buttons explicitly with `ZwykValues:RegisterUpgradeItemButton(button, linkProvider)` and re-register after their own slot updates; `linkProvider(button)` must return the current full item link or nil.
 
-After upgrading to 0.1.17, parser-versioned cache keys automatically refresh item stats, classification and on-use metadata. The report's top-level addon version identifies the exporter; each entry's `parserVersion` and `lastSeen` identify when that issue was collected. Issue exports intentionally preserve historical problems. To collect a fresh report, run `/zv clearissues`, then `/zv clearcache`, hover the affected items again, and run `/zv exportissues`.
+After upgrading to 0.1.22, parser-versioned cache keys automatically reread items, including Mana values previously ignored by older readers. The report's top-level addon version identifies the exporter; each entry's `parserVersion` and `lastSeen` identify when that issue was collected. Issue exports intentionally preserve historical problems. To collect a fresh report, run `/zv clearissues`, then `/zv clearcache`, hover the affected items again, and run `/zv exportissues`.
 
 ## Debugging unrecognized stats
 
@@ -175,7 +183,7 @@ Editing weights increments the profile revision and invalidates its scores. Colo
 
 ## Scope and validation
 
-This release evaluates static item stats and separately estimates the average of supported on-use stat buffs. It does not model procs, set bonuses, stat caps, talent interactions, DPS rotations, class equipment restrictions, or future equipment combinations. Spell-power or attack-power weights should already include their expected value for your build. A higher score is a stat-weight estimate, not a simulated DPS percentage.
+This release evaluates static item stats and separately estimates the average of supported on-use stat buffs. Its weight helpers include the explicitly supported stat bonuses; it does not simulate procs, set bonuses, stat caps, complete talent trees, DPS rotations, class equipment restrictions, or future equipment combinations. Spell-power or attack-power weights should already include their expected value for your build. A higher score is a stat-weight estimate, not a simulated DPS percentage.
 
 The Lua scoring, JSON, cache, parser, comparison, issue export, and tooltip/event logic are covered by mocked API tests included in `tests`. There is no running WoW client in this environment, so the actual UI rendering, the current Forever beta stat vocabulary, and secure tooltip behavior require an in-game check. Use `/zv inspect` for one item or `/zv exportissues` for all recorded issues.
 
@@ -184,6 +192,7 @@ Run the included tests from the addon directory with a Lua interpreter, for exam
 ```sh
 lua tests/test_core.lua
 lua tests/test_derived_weights.lua
+lua tests/test_calculation_pipeline.lua
 lua tests/test_equipment_sets.lua
 lua tests/test_items.lua
 lua tests/test_compare.lua
