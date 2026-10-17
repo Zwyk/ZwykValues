@@ -408,8 +408,17 @@ end
 local function calculationOptions(profile)
     local result = FW.GetDerivedWeightDefaults and FW:GetDerivedWeightDefaults(profile) or {}
     local options = {}
-    for key, value in pairs(result) do options[key] = value end
-    for key, value in pairs(UI.draftCalculationOptions or {}) do options[key] = value end
+    for key, value in pairs(result) do if key ~= "talentRanks" then options[key] = value end end
+    options.talentRanks = {}
+    for key, value in pairs(result.talentRanks or {}) do options.talentRanks[key] = value end
+    for key, value in pairs(UI.draftCalculationOptions or {}) do
+        if key == "talentRanks" then
+            if value == false then options.talentRanks = {}
+            else
+                for node, rank in pairs(value) do options.talentRanks[node] = rank ~= false and rank or nil end
+            end
+        else options[key] = value end
+    end
     return options
 end
 
@@ -421,7 +430,7 @@ local function weightCalculation(field, options, quiet)
         { available = false, reason = "This weight could not be calculated." }
 end
 
-local function useCalculatedWeight(field, result, options, params)
+local function useCalculatedWeight(field, result, options, params, rankChanges, restoreCurrent)
     if not selectedProfile() or not result.available or not finite(result.value) then return end
     UI.loading = true
     field.box:SetText(string.format("%.8g", result.value))
@@ -429,9 +438,16 @@ local function useCalculatedWeight(field, result, options, params)
     if options then
         local draft = {}
         for key, value in pairs(UI.draftCalculationOptions or {}) do draft[key] = value end
-        for _, key in ipairs({ "combatShare", "castingShare", "whileCastingRegen", "kings", "useTalents", "attackerLevelOffset" }) do
+        for _, key in ipairs({ "combatShare", "castingShare", "whileCastingRegen", "kings", "attackerLevelOffset" }) do
             if params and params[key] then draft[key] = options[key] end
         end
+        if rankChanges and next(rankChanges) then
+            local ranks = {}
+            for key, value in pairs(type(draft.talentRanks) == "table" and draft.talentRanks or {}) do ranks[key] = value end
+            for key, value in pairs(rankChanges) do ranks[key] = value end
+            draft.talentRanks = ranks
+        end
+        if restoreCurrent then draft.useTalents = true end
         UI.draftCalculationOptions = draft
     end
     UI.dirtyWeights = true
@@ -449,6 +465,7 @@ local function calculationNumber(value)
     return finite(value) and string.format("%.5g", value) or "?"
 end
 local function hasCalculationParams(result)
+    if result.talentControls and #result.talentControls > 0 then return true end
     for _, enabled in pairs(result.params or {}) do if enabled then return true end end
     return false
 end
@@ -474,14 +491,17 @@ local function calculationSections(field, result, withFooter)
         end
     end
     line(result.contextText, "context")
-    local structured = result.formula or result.contributions or result.assumptions or result.provenance
+    local structured = result.formula or result.contributions or result.modifierLines
     if structured then
         if result.formula and result.formula ~= "" then heading("Formula") line(result.formula) end
         if result.contributions and #result.contributions > 0 then
-            heading("From your weights")
+            heading(result.contributionHeading or "From your weights")
             for _, contribution in ipairs(result.contributions) do
-                line(contribution.label or contribution.key, "text", calculationNumber(contribution.rate) .. (contribution.unit or "") ..
-                    " x " .. calculationNumber(contribution.weight) .. " = " .. calculationNumber(contribution.value))
+                local subtract = contribution.operation == "subtract"
+                local rate = contribution.displayRate or (subtract and math.abs(contribution.rate) or contribution.rate)
+                local value = contribution.displayValue or (subtract and math.abs(contribution.value) or contribution.value)
+                line((subtract and "Less " or "") .. (contribution.label or contribution.key), "text", calculationNumber(rate) .. (contribution.unit or "") ..
+                    " x " .. calculationNumber(contribution.weight) .. " = " .. calculationNumber(value))
             end
         end
     else
@@ -497,10 +517,7 @@ local function calculationSections(field, result, withFooter)
     else
         line(result.reason or "Calculation unavailable.", "warning")
     end
-    if structured then
-        if result.assumptions and #result.assumptions > 0 then heading("Assumptions") unique(result.assumptions, "detail") end
-        if result.provenance and #result.provenance > 0 then heading("Data source") unique(result.provenance, "detail") end
-    end
+    if result.modifierLines and #result.modifierLines > 0 then heading("Modifiers") unique(result.modifierLines, "detail") end
     if withFooter then
         space()
         line(result.params and result.params.attackerLevelOffset and "Click to choose attacker level. Apply weights saves changes." or
@@ -554,19 +571,29 @@ local function showCalculationPrompt(field)
         dialog.help:SetPoint("TOPRIGHT", -18, -45)
         dialog.help:SetHeight(42)
         dialog.help:SetJustifyV("TOP")
-        dialog.sliders, dialog.toggles = {}, {}
-        dialog.attackerSelector = CreateFrame("Frame", nil, dialog)
-        dialog.attackerSelector:SetSize(484, 62)
+        dialog.sliders, dialog.toggles, dialog.talentRows = {}, {}, {}
+        dialog.controlsScroll = CreateFrame("ScrollFrame", "ZwykValuesCalculationControls", dialog, "UIPanelScrollFrameTemplate")
+        dialog.controlsScroll:SetPoint("TOPLEFT", 18, -97)
+        dialog.controlsScroll:SetPoint("TOPRIGHT", -37, -97)
+        dialog.controlsContent = CreateFrame("Frame", nil, dialog.controlsScroll)
+        dialog.controlsContent:SetWidth(465)
+        dialog.controlsContent:SetPoint("TOPLEFT")
+        dialog.controlsScroll:SetScrollChild(dialog.controlsContent)
+        dialog.talentHeading = label(dialog.controlsContent, "Talent ranks", 11, { 0.78, 0.85, 1 })
+        dialog.currentTalents = button(dialog.controlsContent, "Use current talents", 145)
+        hint(dialog.currentTalents, "Use current talents", "Restore automatic current ranks for the talents shown here. This also enables automatic talent bonuses for other stats that have no manual override. Other saved rank overrides are kept.")
+        dialog.attackerSelector = CreateFrame("Frame", nil, dialog.controlsContent)
+        dialog.attackerSelector:SetSize(465, 62)
         dialog.attackerSelector.title = label(dialog.attackerSelector, "Attacker level", 11, { 0.78, 0.85, 1 })
         dialog.attackerSelector.title:SetPoint("TOPLEFT")
         dialog.attackerSelector.choices = {}
         for index, offset in ipairs({ 0, 3 }) do
             local choice = CreateFrame("CheckButton", nil, dialog.attackerSelector, "UICheckButtonTemplate")
             choice:SetSize(24, 24)
-            choice:SetPoint("TOPLEFT", (index - 1) * 242, -25)
+            choice:SetPoint("TOPLEFT", (index - 1) * 232, -25)
             choice.caption = label(choice, "", 11, { 0.85, 0.89, 0.94 })
             choice.caption:SetPoint("LEFT", choice, "RIGHT", 3, 0)
-            choice.caption:SetWidth(210)
+            choice.caption:SetWidth(190)
             choice.caption:SetHeight(28)
             choice.offset = offset
             dialog.attackerSelector.choices[offset] = choice
@@ -589,9 +616,10 @@ local function showCalculationPrompt(field)
         if UISpecialFrames then table.insert(UISpecialFrames, "ZwykValuesWeightCalculation") end
     end
     local dialog = UI.calculationDialog
-    local session = { profile = profile, field = field, options = calculationOptions(profile) }
+    local session = { profile = profile, field = field, options = calculationOptions(profile), rankChanges = {} }
     local initialResult = weightCalculation(field, session.options, true)
     session.params = initialResult.params or {}
+    session.talents = initialResult.talentControls or {}
     UI.calculationSession = session
     dialog.title:SetText("Calculate " .. field.label .. " weight")
     dialog.help:SetText((session.params.attackerLevelOffset and "Choose the attacker's level for armor mitigation." or
@@ -610,6 +638,20 @@ local function showCalculationPrompt(field)
             if result.paramLabels and result.paramLabels[key] then control.caption:SetText(result.paramLabels[key]) end
             if control.hintTitle then hint(control, control.hintTitle, result.paramHelp and result.paramHelp[key] or control.defaultHint) end
         end
+        session.refreshingRanks = true
+        local canRestore = session.options.useTalents == false
+        for _, talent in ipairs(result.talentControls or {}) do
+            local row = dialog.talentRows[talent.key]
+            if row then
+                row.caption:SetText(talent.name .. ": " .. (finite(talent.rank) and talent.rank or "?") .. "/" .. talent.maxRank ..
+                    (talent.effectText and (" (" .. talent.effectText .. ")") or ""))
+                row.current:SetText("Current: " .. (finite(talent.currentRank) and (talent.currentRank .. "/" .. talent.maxRank) or "unavailable"))
+                row:SetValue(finite(talent.rank) and talent.rank or 0)
+                if session.options.talentRanks[talent.key] ~= nil then canRestore = true end
+            end
+        end
+        session.refreshingRanks = false
+        setEnabled(dialog.currentTalents, canRestore)
         if session.params.attackerLevelOffset then
             local playerLevel = result.armorContext and result.armorContext.playerLevel or result.context and result.context.level
             for offset, choice in pairs(dialog.attackerSelector.choices) do
@@ -629,18 +671,17 @@ local function showCalculationPrompt(field)
         dialog.detailsScroll:UpdateScrollChildRect()
         setEnabled(dialog.use, result.available and finite(result.value))
     end
-    local nextY = 102
+    local nextY = 8
     for _, definition in ipairs({
         { key = "kings", text = "Include Blessing of Kings (+10%)", help = "Multiply the relevant primary stat by 1.10. The bonus is applied once, including inverse calculations." },
-        { key = "useTalents", text = "Use current talents", help = "Use the relevant talents from your current specialization. Talent ranks are read again when calculating; profile settings do not save a rank." },
     }) do
         local control = dialog.toggles[definition.key]
         if not control then
-            control = CreateFrame("CheckButton", nil, dialog, "UICheckButtonTemplate")
+            control = CreateFrame("CheckButton", nil, dialog.controlsContent, "UICheckButtonTemplate")
             control:SetSize(24, 24)
             control.caption = label(control, "", 11, { 0.85, 0.89, 0.94 })
             control.caption:SetPoint("LEFT", control, "RIGHT", 3, 0)
-            control.caption:SetWidth(438)
+            control.caption:SetWidth(430)
             control.caption:SetHeight(32)
             dialog.toggles[definition.key] = control
         end
@@ -649,7 +690,7 @@ local function showCalculationPrompt(field)
         control:SetShown(session.params[definition.key] and true or false)
         if session.params[definition.key] then
             control:ClearAllPoints()
-            control:SetPoint("TOPLEFT", 21, -nextY)
+            control:SetPoint("TOPLEFT", 3, -nextY)
             nextY = nextY + 40
             control.caption:SetText(initialResult.paramLabels and initialResult.paramLabels[definition.key] or definition.text)
             control:SetChecked(session.options[definition.key] and true or false)
@@ -661,11 +702,69 @@ local function showCalculationPrompt(field)
             hint(control, definition.text, initialResult.paramHelp and initialResult.paramHelp[definition.key] or definition.help)
         end
     end
+    for _, row in pairs(dialog.talentRows) do row:Hide() end
+    local hasTalents = #session.talents > 0
+    dialog.talentHeading:SetShown(hasTalents)
+    dialog.currentTalents:SetShown(hasTalents)
+    if hasTalents then
+        dialog.talentHeading:ClearAllPoints()
+        dialog.talentHeading:SetPoint("TOPLEFT", 0, -nextY)
+        dialog.currentTalents:ClearAllPoints()
+        dialog.currentTalents:SetPoint("TOPRIGHT", 0, -nextY + 5)
+        nextY = nextY + 30
+        dialog.currentTalents:SetScript("OnClick", function()
+            if UI.calculationSession ~= session then return end
+            session.options.useTalents, session.restoreCurrent = true, true
+            for _, talent in ipairs(session.talents) do
+                session.options.talentRanks[talent.key] = nil
+                session.rankChanges[talent.key] = false
+            end
+            refresh()
+        end)
+        for _, talent in ipairs(session.talents) do
+            local row = dialog.talentRows[talent.key]
+            if not row then
+                row = CreateFrame("Slider", nil, dialog.controlsContent, "OptionsSliderTemplate")
+                row:SetSize(450, 17)
+                row:SetValueStep(1)
+                if row.SetObeyStepOnDrag then row:SetObeyStepOnDrag(true) end
+                row.caption = label(row, "", 11, { 0.85, 0.89, 0.94 })
+                row.caption:SetPoint("BOTTOMLEFT", 0, 7)
+                row.caption:SetWidth(315)
+                row.caption:SetHeight(18)
+                row.current = label(row, "", 10, { 0.65, 0.74, 0.85 })
+                row.current:SetPoint("BOTTOMRIGHT", 0, 7)
+                row.current:SetWidth(130)
+                row.current:SetHeight(18)
+                dialog.talentRows[talent.key] = row
+            end
+            row.talentKey = talent.key
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", 7, -(nextY + 18))
+            nextY = nextY + 66
+            row:SetMinMaxValues(0, talent.maxRank)
+            if row.Low then row.Low:SetText("0") end
+            if row.High then row.High:SetText(tostring(talent.maxRank)) end
+            row:SetScript("OnValueChanged", nil)
+            row:SetValue(finite(talent.rank) and talent.rank or 0)
+            local function chooseRank(_, value)
+                if UI.calculationSession ~= session or session.refreshingRanks then return end
+                value = math.max(0, math.min(talent.maxRank, math.floor(value + 0.5)))
+                if session.options.talentRanks[talent.key] == value and session.rankChanges[talent.key] == value then return end
+                session.options.talentRanks[talent.key], session.rankChanges[talent.key] = value, value
+                refresh()
+            end
+            row:SetScript("OnValueChanged", chooseRank)
+            row:SetScript("OnMouseUp", function(self) chooseRank(self, self:GetValue()) end)
+            hint(row, talent.name, "Choose a rank from 0 to " .. talent.maxRank .. ". Changed ranks remain drafts until Apply weights. Use current talents restores automatic ranks.")
+            row:Show()
+        end
+    end
     for index, definition in ipairs(definitions) do
         local slider = dialog.sliders[index]
         if not slider then
-            slider = CreateFrame("Slider", nil, dialog, "OptionsSliderTemplate")
-            slider:SetSize(470, 17)
+            slider = CreateFrame("Slider", nil, dialog.controlsContent, "OptionsSliderTemplate")
+            slider:SetSize(450, 17)
             slider:SetMinMaxValues(0, 100)
             slider:SetValueStep(1)
             if slider.SetObeyStepOnDrag then slider:SetObeyStepOnDrag(true) end
@@ -682,7 +781,7 @@ local function showCalculationPrompt(field)
         slider:SetShown(shown)
         if shown then
             slider:ClearAllPoints()
-            slider:SetPoint("TOPLEFT", 25, -(nextY + 13))
+            slider:SetPoint("TOPLEFT", 7, -(nextY + 13))
             nextY = nextY + 57
             local function caption(value) slider.caption:SetText(definition.text .. ": " .. math.floor(value + 0.5) .. "%") end
             slider:SetScript("OnValueChanged", nil)
@@ -701,7 +800,7 @@ local function showCalculationPrompt(field)
     dialog.attackerSelector:SetShown(session.params.attackerLevelOffset and true or false)
     if session.params.attackerLevelOffset then
         dialog.attackerSelector:ClearAllPoints()
-        dialog.attackerSelector:SetPoint("TOPLEFT", 18, -nextY)
+        dialog.attackerSelector:SetPoint("TOPLEFT", 0, -nextY)
         nextY = nextY + 65
         for offset, choice in pairs(dialog.attackerSelector.choices) do
             choice:SetScript("OnClick", function()
@@ -714,7 +813,11 @@ local function showCalculationPrompt(field)
                     "Calculate armor mitigation against an attacker three levels above your current level.")
         end
     end
-    local detailsTop = nextY + 10
+    dialog.controlsContent:SetHeight(math.max(1, nextY))
+    dialog.controlsScroll:SetHeight(math.min(260, math.max(1, nextY)))
+    dialog.controlsScroll:SetVerticalScroll(0)
+    dialog.controlsScroll:UpdateScrollChildRect()
+    local detailsTop = 97 + math.min(260, math.max(1, nextY)) + 10
     dialog:SetHeight(math.max(400, detailsTop + 180))
     dialog.detailsScroll:ClearAllPoints()
     dialog.detailsScroll:SetPoint("TOPLEFT", 18, -detailsTop)
@@ -723,7 +826,7 @@ local function showCalculationPrompt(field)
         if UI.calculationSession ~= session or selectedProfile() ~= profile then return end
         refresh()
         if session.result.available and finite(session.result.value) then
-            useCalculatedWeight(field, session.result, session.options, session.params)
+            useCalculatedWeight(field, session.result, session.options, session.params, session.rankChanges, session.restoreCurrent)
             closeProfileDialogs()
         end
     end)

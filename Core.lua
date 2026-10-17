@@ -260,14 +260,37 @@ function FW:ValidateComparisonTarget(target)
     return validComparisonTarget(target)
 end
 
-local function validCalculationOptions(changes, current)
+local function validTalentRanks(changes, current, allowRemoval)
+    if not plainObject(changes) then return nil, "Talent ranks must be a JSON object." end
+    local result = copySavedTable(current or {})
+    for key, rank in pairs(changes) do
+        local definition = FW.DerivedTalentDefinitions and FW.DerivedTalentDefinitions[key]
+        if type(definition) ~= "table" or not finite(definition.maxRank) then
+            return nil, "Unknown talent node '" .. key .. "'."
+        end
+        if rank == false and allowRemoval then result[key] = nil
+        elseif not finite(rank) or rank < 0 or rank > definition.maxRank or rank ~= math.floor(rank) then
+            return nil, "Talent rank for '" .. key .. "' must be a whole number between 0 and " .. definition.maxRank .. "."
+        else result[key] = rank end
+    end
+    return result
+end
+
+local function validCalculationOptions(changes, current, allowRankRemoval)
     if not plainObject(changes) then return nil, "Calculation options must be a JSON object." end
     local result = {}
-    for _, key in ipairs({"combatShare", "castingShare", "whileCastingRegen", "kings", "useTalents", "attackerLevelOffset"}) do
-        if current then result[key] = current[key] end
+    for _, key in ipairs({"combatShare", "castingShare", "whileCastingRegen", "kings", "useTalents", "attackerLevelOffset", "talentRanks"}) do
+        if current then result[key] = copySavedTable(current[key]) end
     end
     for key, value in pairs(changes) do
-        if key == "kings" then
+        if key == "talentRanks" then
+            if value == false and allowRankRemoval then value = nil
+            else
+                local checked, errorText = validTalentRanks(value, result.talentRanks, allowRankRemoval)
+                if not checked then return nil, errorText end
+                value = next(checked) and checked or nil
+            end
+        elseif key == "kings" then
             if type(value) ~= "boolean" then return nil, "Blessing of Kings must be true or false." end
         elseif key == "useTalents" then
             if type(value) ~= "boolean" then return nil, "Talent modifiers must be true or false." end
@@ -546,7 +569,7 @@ function FW:UpdateProfile(id, changes)
         if not replacement.comparisonTarget then return nil, errorMessage end
     end
     if changes.calculationOptions ~= nil and changes.calculationOptions ~= false then
-        replacement.calculationOptions, errorMessage = validCalculationOptions(changes.calculationOptions, profile.calculationOptions)
+        replacement.calculationOptions, errorMessage = validCalculationOptions(changes.calculationOptions, profile.calculationOptions, true)
         if not replacement.calculationOptions then return nil, errorMessage end
     end
     if changes.color ~= nil then

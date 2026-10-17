@@ -4,6 +4,7 @@ local FW = {}
 assert(loadfile(addonPath .. "/JSON.lua"))("ZwykValues", FW)
 assert(loadfile(addonPath .. "/Stats.lua"))("ZwykValues", FW)
 assert(loadfile(addonPath .. "/Core.lua"))("ZwykValues", FW)
+assert(loadfile(addonPath .. "/DerivedWeights.lua"))("ZwykValues", FW)
 
 local passed = 0
 local function check(value, message)
@@ -498,6 +499,68 @@ equal(optionProfile.calculationOptions.attackerLevelOffset, 0, "reload preserves
 equal(FW.DB.profiles[optionCopy.id].calculationOptions.attackerLevelOffset, 3, "reload preserves a boss attacker choice")
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions=false}))
 equal(optionProfile.calculationOptions, nil, "clearing preferences restores live calculator defaults")
+
+-- Only manual talent overrides are saved. Partial edits merge known nodes;
+-- removal markers are accepted by updates and never stored or exported.
+local manualRanks = {["105328"]=3,["105332"]=0}
+local rankRevision = optionProfile.revision
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={kings=true,attackerLevelOffset=0,talentRanks=manualRanks}}))
+manualRanks["105328"] = 1
+equal(optionProfile.calculationOptions.talentRanks["105328"], 3, "talent updates copy their input map")
+equal(optionProfile.calculationOptions.talentRanks["105332"], 0, "an explicit zero rank remains an override")
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks={["105328"]=5}}}))
+equal(optionProfile.calculationOptions.talentRanks["105332"], 0, "partial talent edits preserve other node overrides")
+equal(optionProfile.calculationOptions.kings, true)
+equal(optionProfile.calculationOptions.attackerLevelOffset, 0)
+equal(optionProfile.revision, rankRevision, "editing talent assumptions does not apply a weight")
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks={}}}))
+equal(optionProfile.calculationOptions.talentRanks["105328"], 5, "an empty partial update does not erase manual ranks")
+local rankCopy = assert(FW:CopyProfile(optionProfile.id))
+rankCopy.calculationOptions.talentRanks["105328"] = 2
+equal(optionProfile.calculationOptions.talentRanks["105328"], 5, "profile copies own nested talent maps")
+local ranksEnvelope = assert(FW:ExportProfile(optionProfile.id))
+local ranksImport = assert(FW:ImportProfile(ranksEnvelope))
+equal(ranksImport.calculationOptions.talentRanks["105328"], 5)
+equal(ranksImport.calculationOptions.talentRanks["105332"], 0, "manual zero ranks round-trip through profile exchange")
+FW.DB = nil
+FW:Initialize()
+optionProfile = FW.DB.profiles[optionProfile.id]
+equal(optionProfile.calculationOptions.talentRanks["105328"], 5, "reload validates and preserves supported talent ranks")
+equal(optionProfile.calculationOptions.talentRanks["105332"], 0)
+for _, badRanks in ipairs({false, {["105328"]=false}, {["105328"]=6}, {["105632"]=3},
+    {["105328"]=-1}, {["105328"]=1.5}, {["105328"]="2"}, {["105328"]=true},
+    {["999999"]=0}, {["110871"]=1}, {[105328]=1}, json.null}) do
+    local badEnvelope = assert(json.Decode(ranksEnvelope))
+    badEnvelope.calculationOptions.talentRanks = badRanks
+    if badRanks ~= false and not (type(badRanks)=="table" and badRanks["105328"]==false) then
+        equal(FW:UpdateProfile(optionProfile.id, {name="Must not change",calculationOptions={talentRanks=badRanks}}), nil)
+        equal(optionProfile.name, oldName, "invalid rank updates are atomic")
+        equal(optionProfile.calculationOptions.talentRanks["105328"], 5)
+    end
+    -- Numeric table keys cannot be encoded as an object; the direct-update
+    -- rejection above covers that programmatic case.
+    local numericKeys = type(badRanks)=="table" and badRanks[105328]
+    if not numericKeys then
+        local beforeRankImport = #FW:GetProfiles()
+        equal(FW:ImportProfile(assert(json.Encode(badEnvelope))), nil, "imports require a strict numeric talent-rank object")
+        equal(#FW:GetProfiles(), beforeRankImport, "invalid rank imports create no profile")
+    end
+end
+local talentDefinitions = FW.DerivedTalentDefinitions
+FW.DerivedTalentDefinitions = nil
+equal(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks={["105328"]=1}}}), nil,
+    "an unavailable talent-definition provider cannot admit unvalidated overrides")
+FW.DerivedTalentDefinitions = talentDefinitions
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks={["105328"]=false}}}))
+equal(optionProfile.calculationOptions.talentRanks["105328"], nil, "a per-node removal restores its current talent rank")
+equal(optionProfile.calculationOptions.talentRanks["105332"], 0, "removal preserves other explicit overrides")
+equal(assert(json.Decode(assert(FW:ExportProfile(optionProfile.id)))).calculationOptions.talentRanks["105328"], nil)
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks=false}}))
+equal(optionProfile.calculationOptions.talentRanks, nil, "whole-map removal restores current talents")
+equal(optionProfile.calculationOptions.kings, true, "clearing ranks preserves other calculation settings")
+equal(optionProfile.calculationOptions.attackerLevelOffset, 0)
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks={}}}))
+equal(optionProfile.calculationOptions.talentRanks, nil, "empty override maps need not be persisted")
 
 -- Only the former main profile is migrated, once, for existing installations.
 ZwykValuesDB = {profiles={old={name="Old main",weights={}},other={name="Other",weights={}}},

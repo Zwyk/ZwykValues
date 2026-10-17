@@ -200,10 +200,13 @@ check(intResult.formula:find("15 x Mana",1,true))
 check(intResult.contributions==intResult.sources and #intResult.contributions>0)
 check(#intResult.assumptions>0 and #intResult.provenance>0 and #intResult.footer>0)
 for _, source in ipairs(intResult.provenance) do check(not source:find("level",1,true),"Sources do not repeat context") end
-local negativeMana=calculate("mana",{intellect=0.01,crit=10})
+local negativeMana=FW:GetDerivedWeightOptions("mana",{intellect=0.01,crit=10})
+equal(negativeMana.available,false,"Inconsistent nonnegative weights cannot auto-fill negative Mana")
 check(negativeMana.value<0)
-has(negativeMana.assumptions,"inferred Mana weight is negative")
+check(negativeMana.reason:find("exceeds the Intellect weight",1,true))
 check(negativeMana.formula:find("other modeled contributions",1,true))
+local intentionalNegative=calculate("mana",{intellect=-0.01,crit=10})
+check(intentionalNegative.value<0,"Explicitly negative Intellect weights retain intentional negative inference")
 reset("HUNTER")
 GetAttackPowerForStat=function(index,value) return 10+(index==4 and value*0.5 or 0) end
 GetRangedAttackPowerForStat=function(index,value) return 20+(index==4 and value*0.8 or 0) end
@@ -313,7 +316,7 @@ C_Traits.GetNodeInfo=function(_,node) return {activeRank=ranks[node] or 0} end
 local bonuses={kings=true,useTalents=true}
 local strengthBonus=calculate("strength",{attackPower=1},bonuses)
 close(strengthBonus.value,2*1.1*1.06)
-check(strengthBonus.params.kings and strengthBonus.params.useTalents)
+check(strengthBonus.params.kings and strengthBonus.params.talentRanks)
 check(strengthBonus.talentSummary:find("Divine Strength 3/5 (+6%)",1,true))
 close(calculate("strength",{attackPower=1},{kings=true,useTalents=false}).value,2.2,"Unchecking talents preserves optional Kings")
 close(calculate("strength",{attackPower=1},{kings=false,useTalents=false}).value,2,"Explicit false values do not fall through to defaults")
@@ -342,7 +345,7 @@ equal(savedOptions.kings,true); equal(savedOptions.useTalents,false)
 C_Traits=nil
 local unreadable=FW:GetDerivedWeightOptions("strength",{attackPower=1},{useTalents=true})
 equal(unreadable.available,false,"Selected current-talent calculation requires a readable rank")
-check(unreadable.params.useTalents,"User can uncheck unavailable talent reading")
+check(unreadable.params.talentRanks,"User can choose a rank when current talent reading is unavailable")
 close(calculate("strength",{attackPower=1},{useTalents=false}).value,2,"Unchecking talents permits explicit base-only fallback")
 reset("DRUID")
 form=1
@@ -363,6 +366,92 @@ C_Traits.GetNodeInfo=function(_,node) return {activeRank=node==105800 and 5 or 0
 close(calculate("intellect",{mana=1},bonuses).value,18.15,"Mage Arcane Mind affects Intellect")
 LOCALIZED_CLASS_NAMES_MALE={MAGE="Mage localised"}
 check(calculate("intellect",{mana=1},bonuses).contextText:find("Mage localised",1,true))
+
+-- Talent sliders start at live ranks. Only explicit manual values are stored;
+-- a later specialization/rank change must refresh an unmodified default.
+reset("PALADIN")
+equal(FW.DerivedTalentDefinitions["105328"].maxRank,5)
+equal(FW.DerivedTalentDefinitions["105332"].name,"Divine Intellect")
+equal(FW.DerivedTalentDefinitions["105632"].maxRank,2)
+equal(FW.DerivedTalentDefinitions["110871"],nil,"Casting-regeneration talents remain controlled by the existing percentage setting")
+local currentRanks={[105328]=3,[105332]=5,[105632]=1}
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=currentRanks[node] or 0} end
+local currentStrength=calculate("strength",{attackPower=1})
+equal(#currentStrength.talentControls,1)
+local control=currentStrength.talentControls[1]
+equal(control.key,"105328"); equal(control.nodeID,105328); equal(control.maxRank,5)
+equal(control.currentRank,3); equal(control.rank,3); equal(control.source,"current")
+close(control.effect,.06)
+equal(next(FW:GetDerivedWeightDefaults().talentRanks),nil,"Detected ranks are not silently saved as manual overrides")
+currentRanks[105328]=5
+equal(calculate("strength",{attackPower=1}).talentControls[1].rank,5,"Reopening uses the latest live rank")
+local manualStrength=calculate("strength",{attackPower=1},{talentRanks={["105328"]=2}})
+close(manualStrength.value,2.08)
+equal(manualStrength.talentControls[1].currentRank,5)
+equal(manualStrength.talentControls[1].rank,2)
+equal(manualStrength.talentControls[1].source,"manual")
+close(calculate("strength",{attackPower=1},{talentRanks={["105328"]=0}}).value,2,"Rank-zero override remains zero")
+close(calculate("strength",{attackPower=1},{useTalents=false,talentRanks={["105328"]=4}}).value,2.16,"Manual rank wins over a legacy disabled checkbox")
+equal(calculate("strength",{attackPower=1},{useTalents=false}).talentControls[1].source,"legacyoff")
+for _, invalidRank in ipairs({-1,6,2.5,"2",true,math.huge}) do
+    local invalid=FW:GetDerivedWeightOptions("strength",{attackPower=1},{talentRanks={["105328"]=invalidRank}})
+    equal(invalid.available,false,"Manual rank must be a whole number within its talent bounds")
+    check(invalid.params.talentRanks,"Invalid selected rank remains editable")
+end
+local stored={calculationOptions={talentRanks={["105332"]=0}}}
+local copied=FW:GetDerivedWeightDefaults(stored)
+equal(copied.talentRanks["105332"],0)
+copied.talentRanks["105332"]=5
+equal(stored.calculationOptions.talentRanks["105332"],0,"Calculator defaults do not mutate saved rank maps")
+stats[4]=19.5
+GetSpellCritChanceFromStat=function(_,value) return .05+value*.001 end
+local manualBonuses={kings=true,talentRanks={["105332"]=2}}
+local manualInt=calculate("intellect",{mana=1,crit=2},manualBonuses)
+close(manualInt.modifiers.multiplier,1.144)
+close(manualInt.value,.5+.644*15+.1144*2,"Manual rank applies once across the Intellect breakpoint")
+close(calculate("mana",{intellect=manualInt.value,crit=2},manualBonuses).value,1,"Manual ranks preserve inverse Mana equivalence")
+has(manualInt.modifierLines,"Divine Intellect 2/5")
+has(manualInt.modifierLines,"Kings: +10%")
+for _, value in ipairs(manualInt.modifierLines) do
+    check(not value:find("fallback",1,true) and not value:find("First 20",1,true) and not value:find("not included",1,true),"Modifiers contain selected bonuses, not general assumptions or sources")
+end
+C_Traits=nil
+close(calculate("strength",{attackPower=1},{talentRanks={["105328"]=1}}).value,2.04,"Manual rank works when current rank cannot be read")
+reset("DRUID")
+GetShapeshiftFormID=nil
+close(calculate("stamina",{health=1},{talentRanks={["104939"]=0}}).value,10,"Explicit zero can omit a form-dependent bonus when form is unknown")
+
+-- Reported level30 case: .3 total Intellect weight cannot contain a .313
+-- positive Crit share and still leave a nonnegative Mana value.
+reset("PALADIN",30)
+local reported=FW:GetDerivedWeightOptions("mana",{intellect=.3,crit=10})
+equal(reported.available,false)
+close(reported.value,-.00086666666666667)
+close(reported.manaBreakdown.intellectWeight,.3)
+close(reported.manaBreakdown.otherValue,.313)
+close(reported.manaBreakdown.remainingValue,-.013)
+equal(reported.contributionHeading,"Intellect breakdown")
+equal(reported.contributions[1].operation,"add")
+close(reported.contributions[1].displayRate,1)
+close(reported.contributions[1].displayValue,.3)
+local critShare=reported.contributions[#reported.contributions]
+equal(critShare.key,"crit"); equal(critShare.operation,"subtract")
+check(critShare.rate<0 and critShare.value<0,"Signed inverse coefficients remain mathematically correct internally")
+close(critShare.displayRate,.0313)
+close(critShare.displayValue,.313,"UI shows the positive Crit share in Intellect units")
+check(reported.reason:find("0.313",1,true) and reported.reason:find("0.3",1,true))
+local negativeCrit=calculate("mana",{intellect=.3,crit=-10})
+local negativeCritShare=negativeCrit.contributions[#negativeCrit.contributions]
+equal(negativeCritShare.operation,"subtract")
+check(negativeCritShare.displayValue<0,"Subtracting an intentionally negative source weight must not become subtracting its absolute value")
+local almostZero=calculate("mana",{intellect=.313+1e-15,crit=10})
+equal(almostZero.value,0,"Cancellation noise is clamped relative to the source values")
+local tiny=calculate("mana",{intellect=1e-20})
+check(tiny.value>0,"An absolute epsilon must not erase a small but genuine weight")
+close(tiny.value/1e-20,1/15)
+local scaledInt=calculate("intellect",{mana=2e-12,crit=3e-12}).value
+local scaledMana=calculate("mana",{intellect=scaledInt,crit=3e-12}).value
+close(scaledMana/1e-12,2,"Reciprocal conversion still works for profiles scaled down by1e-12")
 
 reset()
 local draft={attackPower=0.2,crit=10,mp5=2}
