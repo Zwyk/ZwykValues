@@ -105,23 +105,23 @@ check(itemReads==readsAfterParsing,"applying a weight reuses item stats instead 
 assert(FW:UpdateProfile(profile.id,{weights={spellDamage=2,healing=7},
     calculationOptions={talentRanks={["110882"]=2}}}))
 local withChampion=calculate("intellect")
-close(withChampion,5.7475,"older Champion rank 2 contributes 40% spell damage, with no healing")
+close(withChampion,5.7475,"Champion rank 2 contributes 40% spell damage, with no healing")
 assert(FW:UpdateProfile(profile.id,{weights={intellect=withChampion}}))
 close(calculate("mana"),0.25,"Mana inverse removes Champion's same spell-damage share")
 close(FW:GetScore("item:1000",profile),57.475,"the item uses the applied talent-aware weight once")
 check(itemReads==readsAfterParsing,"talent edits reuse parsed item stats")
 clientBuild=70425
 local updatedChampion=calculate("intellect")
-close(updatedChampion,5.2635,"new build changes Champion rank 2 to 20% spell damage")
-close(profile.weights.intellect,withChampion,"build changes require recalculation and Apply")
+close(updatedChampion,5.7475,"build 70425 retains Champion rank 2 at 40% spell damage")
+close(profile.weights.intellect,withChampion,"the fixed Champion coefficient does not change applied weights on a build change")
 assert(FW:UpdateProfile(profile.id,{weights={intellect=updatedChampion}}))
 local updatedScore,updatedRecord=FW:GetScore("item:1000",profile)
-close(updatedScore,52.635,"Apply refreshes scores with the new conversion")
+close(updatedScore,57.475,"the same conversion remains correct after Apply on the new build")
 close(calculate("mana"),0.25,"new build forward and inverse coefficients remain consistent")
 close(FW:GetScore("item:1002",profile),37.5,"conversion talents never modify flat-Mana item scoring")
 check(updatedRecord.stats.spellDamage==nil and updatedRecord.stats.healing==nil,
     "conversion talents do not inject spell damage or healing into parsed item stats")
 local readsAtNewBuild=itemReads
-close(FW:GetScore("item:1000",profile),52.635)
+close(FW:GetScore("item:1000",profile),57.475)
 check(itemReads==readsAtNewBuild,"the new build's parsed stats remain cached")
 print("Calculation-to-item pipeline: " .. checks .. " checks passed.")

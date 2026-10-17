@@ -177,13 +177,10 @@ local primaryTalents = {
     SHAMAN={stamina={{node=104746,name="Toughness",rates={.02,.04,.06,.08,.10}}},
         intellect={{node=104756,name="Ancestral Knowledge",rates={.02,.04,.06,.08,.10}}}},
 }
--- The current client/export and October 15 development notes halve Champion
--- of the Light. Older clients retain the user's 20% per-rank coefficient.
--- https://talentsforever.com/data.json
--- https://us.forums.blizzard.com/en/wow/t/2360696/6
+-- Champion of the Light grants 20% Intellect as spell damage per rank.
 local conversionTalents={
     PALADIN={intellect={{node=110882,name="Champion of the Light",rates={.20,.40,.60},
-        updatedRates={.10,.20,.30},updatedBuild=70425,outputs={spellDamage=true}}}},
+        outputs={spellDamage=true}}}},
     HUNTER={intellect={{node=105008,name="Careful Aim",rates={.20,.40,.60,.80,1},
         outputs={attackPower=true,rangedAttackPower=true}}}},
     SHAMAN={intellect={{node=104755,name="Mental Dexterity",rates={.33,.67,1},outputs={attackPower=true}},

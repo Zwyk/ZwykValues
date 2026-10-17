@@ -497,20 +497,20 @@ has(championOld.modifierLines,"40% intellect -> spell damage")
 close(calculate("mana",{intellect=championOld.value,spellDamage=2,healing=7},{kings=true}).value,.25,"Mana inverse subtracts Champion's spell damage share")
 GetBuildInfo=function() return "1.60.1","70425" end
 local championNew=calculate("intellect",{mana=.25,spellDamage=2,healing=7},{kings=true})
-close(championNew.value,1.21*(15*.25+.2*2),"Build70425 uses current10% per-rank Champion")
-close(talent(championNew,"110882").effect,.2)
+close(championNew.value,1.21*(15*.25+.4*2),"Build70425 keeps20% per-rank Champion")
+close(talent(championNew,"110882").effect,.4)
 close(calculate("mana",{intellect=championNew.value,spellDamage=2,healing=7},{kings=true}).value,.25)
 local newMana=calculate("mana",{intellect=championNew.value,spellDamage=2},{kings=true})
 local championDeduction=contribution(newMana,"spellDamage")
 equal(championDeduction.operation,"subtract")
-close(championDeduction.displayRate,.2*1.21,"Inverse display uses Intellect units for the spell damage deduction")
+close(championDeduction.displayRate,.4*1.21,"Inverse display uses Intellect units for the spell damage deduction")
 check(championDeduction.rate<0 and championDeduction.displayRate>0,"Display keeps a positive deduction without changing the signed math")
 local championMismatch=FW:GetDerivedWeightOptions("mana",{intellect=.1,spellDamage=2})
 equal(championMismatch.available,false)
 check(championMismatch.reason:find("Other modeled contributions",1,true),"Guard includes more than Crit/AP")
 close(calculate("intellect",{spellDamage=1},{talentRanks={["105332"]=0,["110882"]=0}}).value,0,"Rank-zero override omits Champion")
 local manualChampion=calculate("intellect",{spellDamage=1},{talentRanks={["105332"]=0,["110882"]=3}})
-close(manualChampion.value,.3)
+close(manualChampion.value,.6)
 equal(talent(manualChampion,"110882").source,"manual")
 equal(talent(manualChampion,"110882").currentRank,2)
 conversionRanks[110882]=1
@@ -524,7 +524,7 @@ equal(talent(calculate("intellect",{spellDamage=1}),"110882").rank,3,"Changing a
 C_SpecializationInfo=nil
 C_Traits.GetNodeInfo=function(_,node) return {activeRank=conversionRanks[node] or 0} end
 equal(talent(calculate("intellect",{spellDamage=1},{useTalents=false}),"110882").source,"legacyoff")
-close(calculate("intellect",{spellDamage=1},{useTalents=false,talentRanks={["110882"]=2}}).value,.2,"Manual conversion rank wins over legacy opt-out")
+close(calculate("intellect",{spellDamage=1},{useTalents=false,talentRanks={["110882"]=2}}).value,.4,"Manual conversion rank wins over legacy opt-out")
 for _, rank in ipairs({-1,4,1.5,"2",true,math.huge}) do
     equal(FW:GetDerivedWeightOptions("intellect",{spellDamage=1},{talentRanks={["110882"]=rank}}).available,false,"Champion rank must be an integer within0..3")
     local invalidZeroWeight=FW:GetDerivedWeightOptions("intellect",{mana=1},{talentRanks={["110882"]=rank}})
@@ -532,13 +532,15 @@ for _, rank in ipairs({-1,4,1.5,"2",true,math.huge}) do
     check(invalidZeroWeight.reason:find("Champion of the Light",1,true),"Invalid manual rank identifies the editable talent")
 end
 GetBuildInfo=nil
-close(calculate("intellect",{spellDamage=1},{talentRanks={["105332"]=0,["110882"]=1}}).value,.2,"Unknown build keeps the earlier verified20% coefficient")
-check(talent(calculate("intellect",{spellDamage=1}),"110882").provenance:find("Unknown client build",1,true))
+close(calculate("intellect",{spellDamage=1},{talentRanks={["105332"]=0,["110882"]=1}}).value,.2,"Unknown build uses the fixed20% coefficient")
+equal(talent(calculate("intellect",{spellDamage=1}),"110882").provenance,"Forever talent data")
+GetBuildInfo=function() return "1.60.1","99999" end
+close(calculate("intellect",{spellDamage=1,healing=7},{talentRanks={["105332"]=0,["110882"]=3}}).value,.6,"Future builds retain20% per rank without a Healing contribution")
 GetBuildInfo=function() return "1.60.1","70425" end
 stats[4]=19.5
 local championBreakpoint={kings=true,talentRanks={["105332"]=5,["110882"]=3}}
 local breakpointInt=calculate("intellect",{mana=2,spellDamage=3},championBreakpoint)
-close(breakpointInt.value,(.5+.71*15)*2+1.21*.3*3,"Conversion uses the raw Intellect bonus interval once at the Mana breakpoint")
+close(breakpointInt.value,(.5+.71*15)*2+1.21*.6*3,"Conversion uses the raw Intellect bonus interval once at the Mana breakpoint")
 close(calculate("mana",{intellect=breakpointInt.value,spellDamage=3},championBreakpoint).value,2)
 
 reset("HUNTER",60)

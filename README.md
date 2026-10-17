@@ -1,8 +1,8 @@
-# ZwykValues 0.1.27
+# ZwykValues 0.1.28
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
-Version 0.1.27 separates Melee and Spell critical-strike weights. Generic item crit contributes to both; scoped effects contribute only to their matching channel. Agility calculations use Melee Crit, while Intellect and the reverse Mana calculation use Spell Crit. Existing generic Crit weights split evenly to preserve generic-item totals.
+Version 0.1.28 restores Champion of the Light to 20/40/60% Intellect as spell damage and removes its obsolete build-based 10/20/30% override. The separate Melee and Spell critical-strike weights from 0.1.27 are retained.
 
 ## Installation
 
@@ -96,7 +96,7 @@ The calculator also includes these passive conversions, applied once to the effe
 
 | Class / talent | Input | Output by selected rank |
 | --- | --- | --- |
-| Paladin — Champion of the Light | Intellect | Spell damage: 10/20/30%; no healing |
+| Paladin — Champion of the Light | Intellect | Spell damage: 20/40/60%; no healing |
 | Hunter — Careful Aim | Intellect | Melee and ranged attack power: 20/40/60/80/100% |
 | Shaman — Mental Dexterity | Intellect | Melee attack power: 33/67/100% |
 | Shaman — Mental Quickness | Intellect | Spell damage and healing: 15/30% |
@@ -104,7 +104,7 @@ The calculator also includes these passive conversions, applied once to the effe
 | Mage — Arcane Resilience | Intellect | Bonus armor: 25/50% |
 | Priest — Spiritual Guidance | Spirit | Healing: 5/10/15/20/25%; spell damage: 1/3/5/6/8% |
 
-Champion of the Light uses the October 1 baseline of 20/40/60%, replaced by 10/20/30% from client build 70425, following the [October 15 development notes](https://us.forums.blizzard.com/en/wow/t/2360696/6). The obsolete pre-October spell-damage-and-healing version is not modeled. Those notes also change Priest Mental Strength from 3% to 2% Intellect per rank; its primary-stat multiplier follows the same build boundary. If the build cannot be read, the earlier coefficients are retained. Conversion talent names, ranks and effects were checked against the [Talents Forever client-data export](https://talentsforever.com/data.json), used under CC BY 4.0, and the conversion references below. Spiritual Guidance uses the separate spell-damage and healing percentages printed for each rank; no unverified fractional coefficient is substituted. These are local passive-stat relationships; temporary procs and spell-specific scaling are outside this calculator.
+Champion of the Light uses 20% of Intellect as spell damage per selected rank on every client build, including build 70425 and later. It grants no healing in this model. Priest Mental Strength retains its separate build handling: 3% Intellect per rank before build 70425, then 2%, following the [October 15 development notes](https://us.forums.blizzard.com/en/wow/t/2360696/6). If the build cannot be read, Mental Strength retains its earlier coefficient. Conversion talent names, ranks and effects were checked against the [Talents Forever client-data export](https://talentsforever.com/data.json), used under CC BY 4.0, and the conversion references below; Champion's coefficient follows the correction supplied for 0.1.28. Spiritual Guidance uses the separate spell-damage and healing percentages printed for each rank; no unverified fractional coefficient is substituted. These are local passive-stat relationships; temporary procs and spell-specific scaling are outside this calculator.
 
 For the modeled Hunter and Shaman Intellect-to-AP channels, the selected talent coefficient supplies the complete conversion. It replaces the native AP estimate for that channel, rather than adding to a native result that may already contain the current talent. Rank zero therefore removes that conversion even when the currently equipped spec has points in it. Other stat-to-AP paths retain their existing native or base class conversions.
 
