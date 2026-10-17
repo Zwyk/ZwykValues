@@ -23,6 +23,7 @@ local function reset(class, level)
     GetCritChanceFromAgility,GetSpellCritChanceFromIntellect=nil,nil
     GetAttackPowerForStat,GetRangedAttackPowerForStat,UnitHPPerStamina=nil,nil,nil
     GetActiveSpecGroup,C_SpecializationInfo,IsPlayerSpell=nil,nil,nil
+    GetBuildInfo=nil
     C_ClassTalents={GetActiveConfigID=function() return 1 end}
     C_Traits={GetNodeInfo=function() return {activeRank=0} end}
     GetShapeshiftFormID=function() return form end
@@ -203,15 +204,16 @@ for _, source in ipairs(intResult.provenance) do check(not source:find("level",1
 local negativeMana=FW:GetDerivedWeightOptions("mana",{intellect=0.01,crit=10})
 equal(negativeMana.available,false,"Inconsistent nonnegative weights cannot auto-fill negative Mana")
 check(negativeMana.value<0)
-check(negativeMana.reason:find("exceeds the Intellect weight",1,true))
+check(negativeMana.reason:find("exceed the Intellect weight",1,true))
 check(negativeMana.formula:find("other modeled contributions",1,true))
 local intentionalNegative=calculate("mana",{intellect=-0.01,crit=10})
 check(intentionalNegative.value<0,"Explicitly negative Intellect weights retain intentional negative inference")
-reset("HUNTER")
+reset("PALADIN")
 GetAttackPowerForStat=function(index,value) return 10+(index==4 and value*0.5 or 0) end
 GetRangedAttackPowerForStat=function(index,value) return 20+(index==4 and value*0.8 or 0) end
-local hunterInt=calculate("intellect",{mana=0.2,attackPower=2,rangedAttackPower=3,crit=10}).value
-close(calculate("mana",{intellect=hunterInt,attackPower=2,rangedAttackPower=3,crit=10}).value,0.2,"Mana inverse removes native melee and ranged AP as well as crit")
+local nativeInt=calculate("intellect",{mana=0.2,attackPower=2,rangedAttackPower=3,crit=10}).value
+close(nativeInt,6.567,"Native INT/AP channels remain available for classes without a modeled AP conversion")
+close(calculate("mana",{intellect=nativeInt,attackPower=2,rangedAttackPower=3,crit=10}).value,0.2,"Mana inverse removes native melee and ranged AP as well as crit")
 reset()
 for _, entry in ipairs({{19,1},{19.5,8},{20,15},{100,15}}) do
     stats[4]=entry[1]
@@ -452,6 +454,182 @@ close(tiny.value/1e-20,1/15)
 local scaledInt=calculate("intellect",{mana=2e-12,crit=3e-12}).value
 local scaledMana=calculate("mana",{intellect=scaledInt,crit=3e-12}).value
 close(scaledMana/1e-12,2,"Reciprocal conversion still works for profiles scaled down by1e-12")
+
+-- Passive attribute conversions are separate from percentage stat bonuses.
+-- They use selected talent ranks once, including in the reciprocal resource
+-- calculations, and never add a talent twice through a native AP API.
+local function talent(result,key)
+    for _, control in ipairs(result.talentControls) do
+        if control.key==key then return control end
+    end
+    error("Missing talent control: " .. key)
+end
+local function contribution(result,key)
+    for _, source in ipairs(result.contributions) do
+        if source.key==key then return source end
+    end
+end
+local conversionDefinitions={
+    ["110882"]={"Champion of the Light",3},["105008"]={"Careful Aim",5},
+    ["104755"]={"Mental Dexterity",3},["104744"]={"Mental Quickness",2},
+    ["134411"]={"Natural Instinct",2},["105809"]={"Arcane Resilience",2},
+    ["105853"]={"Spiritual Guidance",5},
+}
+for key,expected in pairs(conversionDefinitions) do
+    local definition=FW.DerivedTalentDefinitions[key]
+    equal(definition.name,expected[1]); equal(definition.maxRank,expected[2]); equal(definition.kind,"conversion")
+end
+
+reset("PALADIN",30)
+local conversionRanks={[105332]=5,[110882]=2}
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=conversionRanks[node] or 0} end
+GetSpellCritChanceFromStat=function() return 0 end
+GetBuildInfo=function() return "1.60.1","70300" end
+local championOld=calculate("intellect",{mana=.25,spellDamage=2,healing=7},{kings=true})
+close(championOld.modifiers.multiplier,1.21,"Champion does not multiply the primary stat")
+close(championOld.value,1.21*(15*.25+.4*2),"Older client Champion adds40% spell damage at rank2")
+close(contribution(championOld,"spellDamage").rate,.4*1.21)
+equal(contribution(championOld,"healing"),nil,"Champion never grants Healing")
+equal(#championOld.talentControls,2,"Divine Intellect and Champion each have one control")
+equal(talent(championOld,"110882").currentRank,2)
+equal(talent(championOld,"110882").source,"current")
+has(championOld.modifierLines,"40% intellect -> spell damage")
+close(calculate("mana",{intellect=championOld.value,spellDamage=2,healing=7},{kings=true}).value,.25,"Mana inverse subtracts Champion's spell damage share")
+GetBuildInfo=function() return "1.60.1","70425" end
+local championNew=calculate("intellect",{mana=.25,spellDamage=2,healing=7},{kings=true})
+close(championNew.value,1.21*(15*.25+.2*2),"Build70425 uses current10% per-rank Champion")
+close(talent(championNew,"110882").effect,.2)
+close(calculate("mana",{intellect=championNew.value,spellDamage=2,healing=7},{kings=true}).value,.25)
+local newMana=calculate("mana",{intellect=championNew.value,spellDamage=2},{kings=true})
+local championDeduction=contribution(newMana,"spellDamage")
+equal(championDeduction.operation,"subtract")
+close(championDeduction.displayRate,.2*1.21,"Inverse display uses Intellect units for the spell damage deduction")
+check(championDeduction.rate<0 and championDeduction.displayRate>0,"Display keeps a positive deduction without changing the signed math")
+local championMismatch=FW:GetDerivedWeightOptions("mana",{intellect=.1,spellDamage=2})
+equal(championMismatch.available,false)
+check(championMismatch.reason:find("Other modeled contributions",1,true),"Guard includes more than Crit/AP")
+close(calculate("intellect",{spellDamage=1},{talentRanks={["105332"]=0,["110882"]=0}}).value,0,"Rank-zero override omits Champion")
+local manualChampion=calculate("intellect",{spellDamage=1},{talentRanks={["105332"]=0,["110882"]=3}})
+close(manualChampion.value,.3)
+equal(talent(manualChampion,"110882").source,"manual")
+equal(talent(manualChampion,"110882").currentRank,2)
+conversionRanks[110882]=1
+equal(talent(calculate("intellect",{spellDamage=1}),"110882").rank,1,"Unpinned conversion rank follows current talents")
+local activeGroup=1
+C_SpecializationInfo={GetActiveSpecGroup=function() return activeGroup end,GetCombatConfigIDForSpecGroup=function(group) return group+100 end}
+C_Traits.GetNodeInfo=function(config,node) return {activeRank=node==110882 and (config==101 and 1 or 3) or 0} end
+equal(talent(calculate("intellect",{spellDamage=1}),"110882").rank,1)
+activeGroup=2
+equal(talent(calculate("intellect",{spellDamage=1}),"110882").rank,3,"Changing active specialization refreshes current conversion ranks")
+C_SpecializationInfo=nil
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=conversionRanks[node] or 0} end
+equal(talent(calculate("intellect",{spellDamage=1},{useTalents=false}),"110882").source,"legacyoff")
+close(calculate("intellect",{spellDamage=1},{useTalents=false,talentRanks={["110882"]=2}}).value,.2,"Manual conversion rank wins over legacy opt-out")
+for _, rank in ipairs({-1,4,1.5,"2",true,math.huge}) do
+    equal(FW:GetDerivedWeightOptions("intellect",{spellDamage=1},{talentRanks={["110882"]=rank}}).available,false,"Champion rank must be an integer within0..3")
+    local invalidZeroWeight=FW:GetDerivedWeightOptions("intellect",{mana=1},{talentRanks={["110882"]=rank}})
+    equal(invalidZeroWeight.available,false,"Explicit invalid conversion rank is rejected even with zero destination weight")
+    check(invalidZeroWeight.reason:find("Champion of the Light",1,true),"Invalid manual rank identifies the editable talent")
+end
+GetBuildInfo=nil
+close(calculate("intellect",{spellDamage=1},{talentRanks={["105332"]=0,["110882"]=1}}).value,.2,"Unknown build keeps the earlier verified20% coefficient")
+check(talent(calculate("intellect",{spellDamage=1}),"110882").provenance:find("Unknown client build",1,true))
+GetBuildInfo=function() return "1.60.1","70425" end
+stats[4]=19.5
+local championBreakpoint={kings=true,talentRanks={["105332"]=5,["110882"]=3}}
+local breakpointInt=calculate("intellect",{mana=2,spellDamage=3},championBreakpoint)
+close(breakpointInt.value,(.5+.71*15)*2+1.21*.3*3,"Conversion uses the raw Intellect bonus interval once at the Mana breakpoint")
+close(calculate("mana",{intellect=breakpointInt.value,spellDamage=3},championBreakpoint).value,2)
+
+reset("HUNTER",60)
+conversionRanks={[105008]=3}
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=conversionRanks[node] or 0} end
+GetSpellCritChanceFromStat=function() return 0 end
+GetAttackPowerForStat=function(_,value) return value*.6+100 end
+GetRangedAttackPowerForStat=function(_,value) return value*.6+200 end
+local carefulAim=calculate("intellect",{attackPower=2,rangedAttackPower=3})
+close(carefulAim.value,.6*(2+3),"Careful Aim replaces native INT/AP channels instead of adding to them")
+equal(#carefulAim.talentControls,1)
+equal(talent(carefulAim,"105008").maxRank,5)
+check(carefulAim.params.talentRanks,"Hunter Intellect has a slider without a primary percentage talent")
+has(carefulAim.modifierLines,"Careful Aim 3/5: 60% intellect -> attack power")
+local carefulOptions={kings=true,talentRanks={["105008"]=2}}
+local carefulManual=calculate("intellect",{mana=1,attackPower=2,rangedAttackPower=3},carefulOptions)
+close(carefulManual.value,1.1*(15+.4*5))
+close(calculate("mana",{intellect=carefulManual.value,attackPower=2,rangedAttackPower=3},carefulOptions).value,1)
+close(calculate("intellect",{attackPower=2,rangedAttackPower=3},{talentRanks={["105008"]=0}}).value,0,"Manual rank0 overrides nonzero native current AP")
+GetAttackPowerForStat,GetRangedAttackPowerForStat=nil,nil
+close(calculate("intellect",{attackPower=2,rangedAttackPower=3},carefulOptions).value,2.2,"Known conversion does not require a native AP API")
+conversionRanks[105008]=5
+equal(talent(calculate("intellect",{attackPower=1}),"105008").rank,5)
+C_Traits=nil
+close(calculate("intellect",{mana=1}).value,15,"Unreadable conversion talent does not block zero-weight destinations")
+equal(FW:GetDerivedWeightOptions("intellect",{attackPower=1}).available,false,"Unknown rank cannot invent a weighted conversion")
+close(calculate("intellect",{attackPower=1},{talentRanks={["105008"]=2}}).value,.4,"Manual rank works without a current rank")
+
+reset("SHAMAN",60)
+conversionRanks={[104756]=5,[104755]=2,[104744]=2}
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=conversionRanks[node] or 0} end
+GetSpellCritChanceFromStat=function() return 0 end
+GetAttackPowerForStat=function(_,value) return 100+value*.67 end
+local shamanOptions={kings=true}
+local shamanInt=calculate("intellect",{mana=.5,attackPower=2,spellDamage=3,healing=4},shamanOptions)
+close(shamanInt.value,1.21*(15*.5+.67*2+.3*3+.3*4),"Ancestral Knowledge, Dexterity, Quickness and Kings each apply once")
+equal(#shamanInt.talentControls,3)
+close(contribution(shamanInt,"attackPower").rate,.67*1.21)
+close(contribution(shamanInt,"spellDamage").rate,.3*1.21)
+close(contribution(shamanInt,"healing").rate,.3*1.21)
+close(calculate("mana",{intellect=shamanInt.value,attackPower=2,spellDamage=3,healing=4},shamanOptions).value,.5)
+close(calculate("intellect",{attackPower=2,spellDamage=3,healing=4},{talentRanks={["104756"]=0,["104755"]=0,["104744"]=0}}).value,0)
+
+reset("DRUID",60)
+conversionRanks={[104939]=5,[134411]=2}
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=conversionRanks[node] or 0} end
+GetSpellCritChanceFromStat=function() return 0 end
+local natural=calculate("intellect",{mana=1,spellDamage=100,healing=2},{kings=true})
+close(natural.value,1.21*(15+.25*2))
+equal(contribution(natural,"spellDamage"),nil,"Natural Instinct grants Healing only")
+close(calculate("mana",{intellect=natural.value,healing=2},{kings=true}).value,1)
+
+reset("MAGE",60)
+conversionRanks={[105800]=5,[105809]=2}
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=conversionRanks[node] or 0} end
+GetSpellCritChanceFromStat=function() return 0 end
+local resilience=calculate("intellect",{mana=1,armorBonus=2,armor=100},{kings=true})
+close(resilience.value,1.21*(15+.5*2))
+close(contribution(resilience,"armorBonus").rate,.5*1.21)
+equal(contribution(resilience,"armor"),nil,"Arcane Resilience grants bonus armor, not base armor")
+close(calculate("mana",{intellect=resilience.value,armorBonus=2},{kings=true}).value,1)
+
+reset("PRIEST",60)
+conversionRanks={[105853]=5,[105837]=5}
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=conversionRanks[node] or 0} end
+local guidanceOptions={kings=true,castingShare=.8,combatShare=1,whileCastingRegen=.5}
+local guidance=calculate("spirit",{mp5=2,spellDamage=3,healing=4},guidanceOptions)
+close(guidance.value,1.1*(.625*.6*2+.08*3+.25*4),"Guidance effects ignore the casting rule; Spirit regen does not")
+close(contribution(guidance,"spellDamage").rate,.08*1.1,"Current tooltip has8%, not a guessed25% damage coefficient")
+close(contribution(guidance,"healing").rate,.25*1.1)
+equal(talent(guidance,"105853").rank,5)
+local guidanceMP5=calculate("mp5",{spirit=guidance.value,spellDamage=3,healing=4},guidanceOptions)
+close(guidanceMP5.value,2,"MP5 inverse subtracts Guidance damage and Healing before dividing by regeneration")
+equal(guidanceMP5.contributionHeading,"Spirit breakdown")
+equal(contribution(guidanceMP5,"healing").operation,"subtract")
+close(contribution(guidanceMP5,"spellDamage").displayRate,.08*1.1)
+close(calculate("spirit",{spellDamage=3,healing=4},{castingShare=1,whileCastingRegen=0}).value,.08*3+.25*4,"Direct Guidance conversion persists with zero casting regen")
+close(calculate("spirit",{spellDamage=3,healing=4},{talentRanks={["105853"]=0}}).value,0)
+local guidanceMismatch=FW:GetDerivedWeightOptions("mp5",{spirit=.1,healing=4},guidanceOptions)
+equal(guidanceMismatch.available,false)
+check(guidanceMismatch.reason:find("exceed the Spirit weight",1,true))
+GetBuildInfo=function() return "1.60.1","70300" end
+close(calculate("intellect",{mana=1}).value,15*1.15,"Earlier Mental Strength retains3% per rank")
+GetBuildInfo=function() return "1.60.1","70425" end
+close(calculate("intellect",{mana=1}).value,15*1.10,"Current Mental Strength uses2% per rank")
+conversionRanks[105853]=2
+close(calculate("spirit",{spellDamage=1,healing=1}).value,.03+.10,"Live rank changes select Guidance's verified per-output tables")
+C_Traits=nil
+close(calculate("spirit",{mp5=1},{castingShare=0}).value,.625,"Unreadable zero-weight Guidance remains optional")
+equal(FW:GetDerivedWeightOptions("spirit",{spellDamage=1}).available,false)
+close(calculate("spirit",{spellDamage=1},{talentRanks={["105853"]=3}}).value,.05)
 
 reset()
 local draft={attackPower=0.2,crit=10,mp5=2}

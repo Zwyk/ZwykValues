@@ -172,11 +172,28 @@ local primaryTalents = {
         stamina={{node=104939,name="Heart of the Wild",rates={.04,.08,.12,.16,.20},form="bear"}}},
     HUNTER={agility={{node=110859,name="Lightning Reflexes",rates={.02,.04,.06,.08,.10}}}},
     MAGE={intellect={{node=105800,name="Arcane Mind",rates={.02,.04,.06,.08,.10}}}},
-    PRIEST={intellect={{node=105837,name="Mental Strength",rates={.03,.06,.09,.12,.15}}}},
+    PRIEST={intellect={{node=105837,name="Mental Strength",rates={.03,.06,.09,.12,.15},
+        updatedRates={.02,.04,.06,.08,.10},updatedBuild=70425}}},
     SHAMAN={stamina={{node=104746,name="Toughness",rates={.02,.04,.06,.08,.10}}},
         intellect={{node=104756,name="Ancestral Knowledge",rates={.02,.04,.06,.08,.10}}}},
 }
--- Shared with profile validation; these are primary-stat bonus controls only.
+-- The current client/export and October 15 development notes halve Champion
+-- of the Light. Older clients retain the user's 20% per-rank coefficient.
+-- https://talentsforever.com/data.json
+-- https://us.forums.blizzard.com/en/wow/t/2360696/6
+local conversionTalents={
+    PALADIN={intellect={{node=110882,name="Champion of the Light",rates={.20,.40,.60},
+        updatedRates={.10,.20,.30},updatedBuild=70425,outputs={spellDamage=true}}}},
+    HUNTER={intellect={{node=105008,name="Careful Aim",rates={.20,.40,.60,.80,1},
+        outputs={attackPower=true,rangedAttackPower=true}}}},
+    SHAMAN={intellect={{node=104755,name="Mental Dexterity",rates={.33,.67,1},outputs={attackPower=true}},
+        {node=104744,name="Mental Quickness",rates={.15,.30},outputs={spellDamage=true,healing=true}}}},
+    DRUID={intellect={{node=134411,name="Natural Instinct",rates={.12,.25},outputs={healing=true}}}},
+    MAGE={intellect={{node=105809,name="Arcane Resilience",rates={.25,.50},outputs={armorBonus=true}}}},
+    PRIEST={spirit={{node=105853,name="Spiritual Guidance",rates={.05,.10,.15,.20,.25},
+        outputs={healing=true,spellDamage={.01,.03,.05,.06,.08}}}}},
+}
+-- Shared with profile validation: primary bonuses and passive conversions.
 -- Repeated nodes (Heart of the Wild) have stat-specific rates below but share
 -- one saved rank and one maximum rank.
 FW.DerivedTalentDefinitions={}
@@ -185,6 +202,14 @@ for _, byStat in pairs(primaryTalents) do
         for _, model in ipairs(models) do
             local key=tostring(model.node)
             FW.DerivedTalentDefinitions[key]={key=key,nodeID=model.node,name=model.name,maxRank=#model.rates,kind="primary"}
+        end
+    end
+end
+for _, byStat in pairs(conversionTalents) do
+    for _, models in pairs(byStat) do
+        for _, model in ipairs(models) do
+            local key=tostring(model.node)
+            FW.DerivedTalentDefinitions[key]={key=key,nodeID=model.node,name=model.name,maxRank=#model.rates,kind="conversion"}
         end
     end
 end
@@ -237,6 +262,38 @@ local function traitRank(node)
     if readable(info) and type(info)=="table" and finite(info.activeRank) then
         return math.max(0, math.floor(info.activeRank))
     end
+end
+
+local function modelRates(model)
+    if not model.updatedRates then return model.rates, "Forever talent data" end
+    local _, build=call(GetBuildInfo)
+    if readable(build) and type(build)=="string" then build=tonumber(build) end
+    if finite(build) and build>=model.updatedBuild then return model.updatedRates, "Forever client build " .. number(build) end
+    return model.rates, finite(build) and ("Forever client before build " .. model.updatedBuild)
+        or "Unknown client build: older verified talent coefficients"
+end
+
+local function talentControl(model, ctx, options, defaults, primary)
+    local rates, provenance=modelRates(model)
+    local currentRank=ctx.live and traitRank(model.node)
+    if not finite(currentRank) or currentRank>#rates then currentRank=nil end
+    local key=tostring(model.node)
+    local map=options.talentRanks
+    local manual=readable(map) and type(map)=="table" and map[key] or nil
+    local rank, source, failure=currentRank,"current"
+    local useTalents=defaults.useTalents
+    if readable(options.useTalents) and type(options.useTalents)=="boolean" then useTalents=options.useTalents end
+    if not readable(manual) then
+        source,rank="manual",nil; failure="Selected rank is unavailable for " .. model.name .. "."
+    elseif manual~=nil then
+        source="manual"
+        if finite(manual) and manual>=0 and manual<=#rates and manual==math.floor(manual) then rank=manual
+        else rank=nil; failure="Choose a whole rank from 0 to " .. #rates .. " for " .. model.name .. "." end
+    elseif not useTalents then rank,source=0,"legacyoff" end
+    local rate=rank and (rank==0 and 0 or rates[rank])
+    return {key=key,nodeID=model.node,name=model.name,maxRank=#rates,currentRank=currentRank,
+        rank=rank,effect=rate,source=source,kind=model.outputs and "conversion" or "primary",provenance=provenance,
+        effectText=finite(rate) and ("+" .. number(rate*100) .. "% " .. primary) or "Current rank unavailable"}, failure
 end
 
 function FW:GetDerivedWeightDefaults(profile)
@@ -294,24 +351,10 @@ local function primaryMultiplier(ctx, key, options, defaults)
         local applies=unknownForm or not model.form or (finite(form) and ((model.form=="cat" and form==1) or (model.form=="bear" and (form==5 or form==8))))
         if applies then
             data.supported=true
-            local currentRank=ctx.live and traitRank(model.node)
-            if not finite(currentRank) or currentRank>#model.rates then currentRank=nil end
-            local key=tostring(model.node)
-            local map=options.talentRanks
-            local manual=readable(map) and type(map)=="table" and map[key] or nil
-            local rank, source=currentRank, "current"
-            if not readable(manual) then
-                source,rank="manual",nil
-                data.unavailable="Selected rank is unavailable for " .. model.name .. "."
-            elseif manual~=nil then
-                source="manual"
-                if finite(manual) and manual>=0 and manual<=#model.rates and manual==math.floor(manual) then rank=manual
-                else rank=nil; data.unavailable="Choose a whole rank from 0 to " .. #model.rates .. " for " .. model.name .. "." end
-            elseif not useTalents then rank,source=0,"legacyoff" end
-            local rate=rank and (rank==0 and 0 or model.rates[rank])
-            data.controls[#data.controls+1]={key=key,nodeID=model.node,name=model.name,maxRank=#model.rates,
-                currentRank=currentRank,rank=rank,effect=rate,source=source,
-                effectText=finite(rate) and ("+" .. number(rate*100) .. "% " .. primary) or "Current rank unavailable"}
+            local control,failure=talentControl(model,ctx,options,defaults,primary)
+            local rank,rate,source=control.rank,control.effect,control.source
+            if failure then data.unavailable=failure end
+            data.controls[#data.controls+1]=control
             if finite(rate) then
                 data.summaries[#data.summaries+1]=model.name .. " " .. rank .. "/" .. #model.rates .. " (+" .. number(rate*100) .. "%)"
                 multiplier=multiplier*(1+rate); data.bonuses[#data.bonuses+1]={name=model.name,rate=rate,rank=rank,source=source}
@@ -324,6 +367,33 @@ local function primaryMultiplier(ctx, key, options, defaults)
     end
     data.multiplier=multiplier
     return multiplier,data
+end
+
+local conversionOrder={"attackPower","rangedAttackPower","spellDamage","healing","armorBonus"}
+local function conversionGains(ctx, primary, increment, options, defaults)
+    local models=conversionTalents[ctx.class] and conversionTalents[ctx.class][primary]
+    local gains,controls={},{}
+    for _, model in ipairs(models or {}) do
+        local control,failure=talentControl(model,ctx,options,defaults,primary)
+        control.failure=failure
+        local effects={}
+        for _, stat in ipairs(conversionOrder) do
+            local output=model.outputs[stat]
+            if output then
+                local rate=control.effect
+                if type(output)=="table" then rate=control.rank and (control.rank==0 and 0 or output[control.rank]) end
+                local value=finite(rate) and rate*increment or nil
+                gains[stat]={rate=value,source="Forever talent conversion: " .. model.name .. "; " .. control.provenance}
+                if finite(rate) then
+                    local label=FW.StatByKey and FW.StatByKey[stat] and FW.StatByKey[stat].label or stat
+                    effects[#effects+1]=number(rate*100) .. "% " .. primary .. " -> " .. label:lower()
+                end
+            end
+        end
+        control.effectText=#effects>0 and table.concat(effects,"; ") or "Current rank unavailable"
+        controls[#controls+1]=control
+    end
+    return gains,controls
 end
 
 function FW:IsDerivedWeightStat(key) return derived[key]==true end
@@ -435,6 +505,7 @@ end
 
 local function sourceLabel(source)
     if not source then return end
+    if source:find("Forever talent conversion",1,true) then return "Verified Forever talent conversion" end
     if source:find("Forever Armor",1,true) then return "Live Forever Armor API" end
     if source:find("Live client",1,true) then return "Live game API" end
     if source:find("Forever client constants",1,true) then return "Forever client constants" end
@@ -481,6 +552,15 @@ function FW:GetDerivedWeightOptions(key, weights, options)
             if control.source=="manual" and finite(control.rank) then result.options.talentRanks[control.key]=control.rank end
         end
     end
+    local gains, conversionControls=conversionGains(ctx,modifiers and modifiers.primary,increment,options,defaults)
+    for _, control in ipairs(conversionControls) do
+        result.talentControls[#result.talentControls+1]=control
+        result.params.talentRanks=true
+        result.paramLabels.talentRanks="Talent ranks"
+        result.options=result.options or {}
+        result.options.talentRanks=result.options.talentRanks or {}
+        if control.source=="manual" and finite(control.rank) then result.options.talentRanks[control.key]=control.rank end
+    end
     if not derived[key] then result.reason="No reliable direct conversion is available for this attribute."; return result end
     if not ctx.class or not strengthAP[ctx.class] or not ctx.level then
         result.reason="Player class and level are not available yet."; return result
@@ -490,6 +570,9 @@ function FW:GetDerivedWeightOptions(key, weights, options)
     local function assume(value) result.assumptions[#result.assumptions+1]=value; line(value) end
     local function modifier(value) result.modifierLines[#result.modifierLines+1]=value end
     local function fail(message) failed=true; result.reason=result.reason or message; line(message) end
+    for _, control in ipairs(conversionControls) do
+        if control.failure then fail(control.failure) end
+    end
     local function weight(stat)
         local value=weights[stat]
         if value==nil then return 0 end
@@ -526,12 +609,58 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         add("rangedAttackPower", ranged, rangedSource)
     end
     local function addIntellectOther(scale)
-        local ap, source=attackRate(4, false, ctx, increment)
+        -- Known INT-to-AP talent channels replace native AP-from-stat results.
+        -- Their class baseline is zero, while native inclusion of the current
+        -- talent is not attributable. Adding both would double-count it and
+        -- make manual rank-zero/what-if calculations incorrect.
+        local ap, source
+        if gains.attackPower then ap,source=gains.attackPower.rate,gains.attackPower.source
+        else ap,source=attackRate(4,false,ctx,increment) end
         add("attackPower", ap and ap*scale, source)
-        local ranged, rangedSource=attackRate(4, true, ctx, increment)
+        local ranged,rangedSource
+        if gains.rangedAttackPower then ranged,rangedSource=gains.rangedAttackPower.rate,gains.rangedAttackPower.source
+        else ranged,rangedSource=attackRate(4,true,ctx,increment) end
         add("rangedAttackPower", ranged and ranged*scale, rangedSource)
         local crit, critSource=critRate(4, ctx, increment)
         add("crit", crit and crit*scale, critSource, "%")
+        for _, stat in ipairs({"spellDamage","healing","armorBonus"}) do
+            local gain=gains[stat]
+            if gain then add(stat,gain.rate and gain.rate*scale,gain.source) end
+        end
+    end
+    local function addSpiritOther(scale)
+        for _, stat in ipairs({"spellDamage","healing"}) do
+            local gain=gains[stat]
+            if gain then add(stat,gain.rate and gain.rate*scale,gain.source) end
+        end
+    end
+    local function inverseBreakdown(stat,gain)
+        local definition=FW.StatByKey and FW.StatByKey[stat]
+        local label=definition and definition.label or stat
+        result.contributionHeading=label .. " breakdown"
+        local otherValue=0
+        for _, contribution in ipairs(result.contributions) do
+            contribution.operation=contribution.key==stat and "add" or "subtract"
+            contribution.displayRate=math.abs(contribution.rate)*gain
+            contribution.displayWeight=contribution.weight
+            contribution.displayValue=contribution.displayRate*contribution.weight
+            if contribution.operation=="subtract" then otherValue=otherValue+contribution.displayValue end
+            if not finite(contribution.displayRate) or not finite(contribution.displayValue) then
+                fail("The " .. label .. " breakdown is outside the supported numeric range.")
+            end
+        end
+        local statWeight=weight(stat)
+        local residual=statWeight-otherValue
+        local tolerance=1e-12*math.max(1e-300,math.abs(statWeight),math.abs(otherValue))
+        local breakdown={statWeight=statWeight,otherValue=otherValue,remainingValue=residual,gain=gain}
+        if stat=="intellect" then
+            breakdown.intellectWeight,breakdown.manaGain=statWeight,gain; result.manaBreakdown=breakdown
+        else result.spiritBreakdown=breakdown end
+        if not finite(residual) or not finite(otherValue) then fail("The " .. label .. " breakdown is outside the supported numeric range.")
+        elseif math.abs(residual)<=tolerance then result.value=0
+        elseif residual<0 and statWeight>=0 then
+            fail("Other modeled contributions (" .. number(otherValue) .. ") exceed the " .. label .. " weight (" .. number(statWeight) .. "). Adjust those weights or talent ranks first.")
+        end
     end
     line(ctx.class .. " · level " .. ctx.level .. "; weight per 1 " .. (FW.StatByKey and FW.StatByKey[key] and FW.StatByKey[key].label or key))
     if modifiers then
@@ -541,9 +670,10 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         if modifiers.kings then modifier("Kings: +10%.") end
         if modifiers.supported then
             assume("Selected talents: " .. result.talentSummary)
-            for _, control in ipairs(result.talentControls) do
+            for _, control in ipairs(modifiers.controls) do
                 if finite(control.effect) then
-                    modifier(control.name .. " " .. control.rank .. "/" .. control.maxRank .. ": +" .. number(control.effect*100) .. "%.")
+                    if control.kind=="conversion" then modifier(control.name .. " " .. control.rank .. "/" .. control.maxRank .. ": " .. control.effectText .. ".")
+                    else modifier(control.name .. " " .. control.rank .. "/" .. control.maxRank .. ": +" .. number(control.effect*100) .. "%.") end
                 end
             end
             if not modifiers.unavailable then
@@ -552,6 +682,13 @@ function FW:GetDerivedWeightOptions(key, weights, options)
             end
         end
         if modifiers.unavailable then fail(modifiers.unavailable) end
+    end
+    -- Classes with no primary multiplier talent (e.g. Hunter Intellect) still
+    -- have conversion sliders and their selected effects in Modifiers.
+    if not modifiers or not modifiers.supported then
+        for _, control in ipairs(conversionControls) do
+            if finite(control.effect) then modifier(control.name .. " " .. control.rank .. "/" .. control.maxRank .. ": " .. control.effectText .. ".") end
+        end
     end
     if key=="strength" then
         addAttack(1)
@@ -593,31 +730,12 @@ function FW:GetDerivedWeightOptions(key, weights, options)
             else
                 add("intellect", 1/mana, manaSource)
                 addIntellectOther(-1/mana)
-                result.contributionHeading="Intellect breakdown"
-                local otherValue=0
-                for _, contribution in ipairs(result.contributions) do
-                    contribution.operation=contribution.key=="intellect" and "add" or "subtract"
-                    contribution.displayRate=math.abs(contribution.rate)*mana
-                    contribution.displayWeight=contribution.weight
-                    contribution.displayValue=contribution.displayRate*contribution.weight
-                    if contribution.operation=="subtract" then otherValue=otherValue+contribution.displayValue end
-                    if not finite(contribution.displayRate) or not finite(contribution.displayValue) then
-                        fail("The Intellect breakdown is outside the supported numeric range.")
-                    end
-                end
-                local intellectWeight=weight("intellect")
-                local residual=intellectWeight-otherValue
-                local tolerance=1e-12*math.max(1e-300,math.abs(intellectWeight),math.abs(otherValue))
-                result.manaBreakdown={intellectWeight=intellectWeight,otherValue=otherValue,remainingValue=residual,manaGain=mana}
+                inverseBreakdown("intellect",mana)
                 result.formula="Mana = (Intellect - its other modeled contributions) / " .. number(mana)
-                assume("Subtracts Intellect's crit and native AP contributions before converting the remaining weight to Mana.")
+                assume("Subtracts Intellect's other modeled contributions before converting the remaining weight to Mana.")
                 assume("Temporary maximum-Mana modifiers are not included.")
                 assume("Uses the next Intellect point, including the first-20 breakpoint.")
-                if not finite(residual) or not finite(otherValue) then fail("The Intellect breakdown is outside the supported numeric range.")
-                elseif math.abs(residual)<=tolerance then result.value=0
-                elseif residual<0 and intellectWeight>=0 then
-                    fail("Crit/AP share (" .. number(otherValue) .. ") exceeds the Intellect weight (" .. number(intellectWeight) .. "). Adjust those weights or talent ranks before inferring Mana.")
-                elseif result.value<0 then assume("The intentionally negative Intellect weight implies a negative Mana weight.") end
+                if not failed and result.value<0 then assume("The intentionally negative Intellect weight implies a negative Mana weight.") end
             end
         end
     elseif key=="spirit" or key=="mp5" then
@@ -657,9 +775,17 @@ function FW:GetDerivedWeightOptions(key, weights, options)
                     assume(number(combat*100) .. "% in combat; casting share applies during combat.")
                     modifier(number(combat*100) .. "% in combat.")
                     if effective<=0 then fail("Spirit gives no mana at these ratios; an MP5 weight cannot be inferred. Reduce casting/combat time or increase retained regeneration.")
-                    else add("spirit", 1/effective, "MP5 = Spirit weight ÷ effective MP5 per Spirit.") end
-                else add("mp5", effective, "Spirit = MP5 weight × effective MP5 per Spirit.") end
-                assume("Mana regeneration only; health regeneration and other talent conversions are excluded.")
+                    else
+                        add("spirit", 1/effective, "MP5 = remaining Spirit weight / effective MP5 per Spirit.")
+                        addSpiritOther(-1/effective)
+                        inverseBreakdown("spirit",effective)
+                        result.formula="MP5 = (Spirit - its other modeled contributions) / " .. number(effective)
+                    end
+                else
+                    add("mp5", effective, "Spirit = MP5 weight x effective MP5 per Spirit.")
+                    addSpiritOther(1)
+                end
+                assume("Health regeneration and unmodeled talent conversions are excluded.")
             end
         end
     elseif key=="attackPower" then

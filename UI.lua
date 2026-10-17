@@ -643,9 +643,11 @@ local function showCalculationPrompt(field)
         for _, talent in ipairs(result.talentControls or {}) do
             local row = dialog.talentRows[talent.key]
             if row then
-                row.caption:SetText(talent.name .. ": " .. (finite(talent.rank) and talent.rank or "?") .. "/" .. talent.maxRank ..
-                    (talent.effectText and (" (" .. talent.effectText .. ")") or ""))
+                row.caption:SetText(talent.name .. ": " .. (finite(talent.rank) and talent.rank or "?") .. "/" .. talent.maxRank)
                 row.current:SetText("Current: " .. (finite(talent.currentRank) and (talent.currentRank .. "/" .. talent.maxRank) or "unavailable"))
+                hint(row, talent.name, (talent.effectText and (talent.effectText .. "\n") or "") ..
+                    "Current rank: " .. (finite(talent.currentRank) and (talent.currentRank .. "/" .. talent.maxRank) or "unavailable") ..
+                    ". Choose a rank from 0 to " .. talent.maxRank .. ". Apply weights saves manual ranks; Use current talents restores automatic ranks.")
                 row:SetValue(finite(talent.rank) and talent.rank or 0)
                 if session.options.talentRanks[talent.key] ~= nil then canRestore = true end
             end
@@ -732,10 +734,12 @@ local function showCalculationPrompt(field)
                 row.caption:SetPoint("BOTTOMLEFT", 0, 7)
                 row.caption:SetWidth(315)
                 row.caption:SetHeight(18)
+                row.caption:SetWordWrap(false)
                 row.current = label(row, "", 10, { 0.65, 0.74, 0.85 })
                 row.current:SetPoint("BOTTOMRIGHT", 0, 7)
                 row.current:SetWidth(130)
                 row.current:SetHeight(18)
+                row.current:SetWordWrap(false)
                 dialog.talentRows[talent.key] = row
             end
             row.talentKey = talent.key

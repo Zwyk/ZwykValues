@@ -853,7 +853,7 @@ check(critDeduction and not critDeduction:match("^-"), "Mana presents Crit as a 
 check(intellectInput and intellectInput:match("^1 x 0"), "Mana displays the original Intellect weight before converting units")
 gear("mana"):Fire("OnClick")
 check(not calculationDialog.use.enabled, "inconsistent Intellect and Crit weights cannot fill a negative inferred Mana weight")
-check(calculationDialog.details:GetText():find("exceeds the Intellect weight", 1, true), "Mana explains why an inconsistent weight cannot be inferred")
+check(calculationDialog.details:GetText():find("exceed the Intellect weight", 1, true), "Mana explains why an inconsistent weight cannot be inferred")
 check(not calculationDialog.details:GetText():find("Data source", 1, true) and not calculationDialog.details:GetText():find("Assumptions", 1, true), "calculation prompts omit sources and general assumptions too")
 calculationDialog.cancel:Fire("OnClick")
 userText(weightBox("Intellect"), "45")
@@ -933,6 +933,83 @@ calculationDialog.use:Fire("OnClick")
 click("Apply weights")
 equal(calculationProfile.calculationOptions.useTalents, true, "Apply saves the explicit return to automatic talents")
 equal(calculationProfile.calculationOptions.talentRanks["105328"], nil, "restoring automatic mode never saves the detected rank")
+
+-- Conversion talents use the same rank controls and expose their extra inputs.
+local conversionClass, conversionTraits, conversionBuild = UnitClass, C_Traits.GetNodeInfo, GetBuildInfo
+local championRank, carefulAimRank = 2, 3
+UnitClass = function() return "Paladin", "PALADIN" end
+GetBuildInfo = function() return "1.60.1", "70425", "Oct 17 2026", 16001 end
+C_Traits.GetNodeInfo = function(config, node)
+    if node == 110882 then return { activeRank = championRank } end
+    if node == 105332 then return { activeRank = 2 } end
+    if node == 105008 then return { activeRank = carefulAimRank } end
+    return conversionTraits(config, node)
+end
+local conversionProfile = assert(FW:CreateProfile("Conversion controls", { mana = 1, spellDamage = 2, healing = 100, intellect = 100 }))
+find(function(control) return control.kind == "Button" and control.profileID == conversionProfile.id end):Fire("OnClick")
+gear("intellect"):Fire("OnEnter")
+check(sourceHighlighted("Spell damage") and not sourceHighlighted("Healing"), "Paladin Intellect highlights Champion spell damage without healing")
+gear("intellect"):Fire("OnClick")
+local champion = calculationDialog.talentRows["110882"]
+check(champion and champion:IsShown() and intellectRanks:IsShown(), "Intellect prompt shows primary and conversion talents together")
+equal(champion.maxValue, 3, "Champion of the Light slider uses its three-rank cap")
+equal(champion:GetValue(), 2, "conversion slider defaults to the current Champion rank")
+check(#champion.caption:GetText() * champion.caption.fontSize * 0.56 <= champion.caption:GetWidth(), "long conversion talent names fit their selected-rank caption")
+check(not champion.caption:GetText():find("->", 1, true), "conversion effects do not crowd the rank caption")
+champion:Fire("OnEnter")
+check(table.concat(calculatorLines, "\n"):lower():find("spell damage", 1, true), "conversion talent hover explains the human-readable effect")
+calculationDialog.toggles.kings:SetChecked(true)
+calculationDialog.toggles.kings:Fire("OnClick")
+local combinedModifiers = calculationDialog.details:GetText()
+check(combinedModifiers:find("Divine Intellect", 1, true) and combinedModifiers:find("Champion of the Light", 1, true) and combinedModifiers:find("Kings", 1, true), "modifier preview includes stat and conversion talents with Kings")
+calculationDialog.use:Fire("OnClick")
+click("Apply weights")
+equal(conversionProfile.calculationOptions.talentRanks, nil, "using current conversion ranks never pins detected ranks")
+championRank = 1
+gear("intellect"):Fire("OnClick")
+equal(champion:GetValue(), 1, "automatic conversion ranks follow current talent changes")
+local beforeConversionPreview = calculationDialog.details:GetText()
+champion:SetValue(3)
+check(calculationDialog.details:GetText() ~= beforeConversionPreview, "manual conversion ranks update the calculation preview")
+calculationDialog.use:Fire("OnClick")
+click("Apply weights")
+equal(conversionProfile.calculationOptions.talentRanks["110882"], 3, "Apply saves an explicit conversion-rank override")
+gear("intellect"):Fire("OnClick")
+champion:SetValue(0)
+calculationDialog.cancel:Fire("OnClick")
+equal(conversionProfile.calculationOptions.talentRanks["110882"], 3, "Cancel preserves a saved conversion-rank override")
+gear("mana"):Fire("OnEnter")
+check(sourceHighlighted("Spell damage") and not sourceHighlighted("Healing"), "inverse Mana highlights the same Paladin conversion input")
+local spellDeduction = false
+for _, columns in ipairs(calculatorDoubleLines) do if columns.left == "Less Spell damage" then spellDeduction = true end end
+check(spellDeduction, "inverse Mana presents the conversion's spell-damage share as a deduction")
+gear("intellect"):Fire("OnClick")
+calculationDialog.currentTalents:Fire("OnClick")
+equal(champion:GetValue(), championRank, "Use current talents restores the live conversion rank")
+calculationDialog.use:Fire("OnClick")
+click("Apply weights")
+equal(conversionProfile.calculationOptions.talentRanks, nil, "restoring current conversion talents clears manual overrides")
+UnitClass = function() return "Hunter", "HUNTER" end
+userText(weightBox("Attack power"), "4")
+userText(weightBox("Ranged attack power"), "5")
+gear("intellect"):Fire("OnEnter")
+check(sourceHighlighted("Attack power") and sourceHighlighted("Ranged attack power"), "Hunter Intellect highlights both Careful Aim attack-power inputs")
+check(not sourceHighlighted("Spell damage"), "changing classes replaces conversion source highlights")
+gear("intellect"):Fire("OnClick")
+local carefulAim = calculationDialog.talentRows["105008"]
+check(carefulAim and carefulAim:IsShown() and not champion:IsShown(), "Hunter prompt replaces Paladin conversion controls")
+equal(carefulAim.maxValue, 5, "Careful Aim slider uses its verified rank cap")
+equal(carefulAim:GetValue(), 3, "Careful Aim defaults to the current rank")
+carefulAim:SetValue(0)
+calculationDialog.cancel:Fire("OnClick")
+gear("intellect"):Fire("OnClick")
+equal(carefulAim:GetValue(), 3, "cancelled Hunter ranks remain automatic")
+calculationDialog.use:Fire("OnClick")
+click("Apply weights")
+equal(conversionProfile.calculationOptions.talentRanks, nil, "Hunter automatic ranks are not saved as manual overrides")
+UnitClass, C_Traits.GetNodeInfo, GetBuildInfo = conversionClass, conversionTraits, conversionBuild
+FW:DeleteProfile(conversionProfile.id)
+find(function(control) return control.kind == "Button" and control.profileID == calculationProfile.id end):Fire("OnClick")
 
 -- Armor compares mitigation at an explicitly selected attacker level.
 local effectivePlayerLevel, armorLevels = 31, {}

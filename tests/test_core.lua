@@ -562,6 +562,40 @@ equal(optionProfile.calculationOptions.attackerLevelOffset, 0)
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks={}}}))
 equal(optionProfile.calculationOptions.talentRanks, nil, "empty override maps need not be persisted")
 
+-- Conversion talents use the same validated rank-map schema as primary-stat
+-- talents; their distinct kind must not prevent profile exchange or copying.
+local conversionRanks = {}
+local conversionNodes = {
+    {"110882",3}, {"105008",5}, {"104755",3}, {"104744",2},
+    {"134411",2}, {"105809",2}, {"105853",5},
+}
+for _, fixture in ipairs(conversionNodes) do
+    local definition = assert(FW.DerivedTalentDefinitions[fixture[1]])
+    equal(definition.kind, "conversion")
+    equal(definition.maxRank, fixture[2])
+    conversionRanks[fixture[1]] = fixture[2]
+end
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks=conversionRanks}}))
+conversionRanks["110882"] = 0
+equal(optionProfile.calculationOptions.talentRanks["110882"], 3, "conversion overrides own their input map")
+local conversionCopy = assert(FW:CopyProfile(optionProfile.id))
+conversionCopy.calculationOptions.talentRanks["110882"] = 1
+equal(optionProfile.calculationOptions.talentRanks["110882"], 3, "copies do not share conversion override maps")
+local conversionImport = assert(FW:ImportProfile(assert(FW:ExportProfile(optionProfile.id))))
+for _, fixture in ipairs(conversionNodes) do
+    equal(conversionImport.calculationOptions.talentRanks[fixture[1]], fixture[2], "conversion ranks round-trip")
+    equal(FW:UpdateProfile(optionProfile.id, {name="Must not change",calculationOptions={
+        talentRanks={[fixture[1]]=fixture[2]+1}}}), nil, "conversion rank bounds come from their own definitions")
+    equal(optionProfile.name, oldName, "out-of-range conversion updates remain atomic")
+end
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={talentRanks={["110882"]=0}}}))
+equal(optionProfile.calculationOptions.talentRanks["105008"], 5, "editing one class's conversion preserves other overrides")
+FW.DB = nil
+FW:Initialize()
+optionProfile = FW.DB.profiles[optionProfile.id]
+equal(optionProfile.calculationOptions.talentRanks["110882"], 0, "reload preserves an explicit zero conversion rank")
+equal(optionProfile.calculationOptions.talentRanks["105853"], 5, "reload preserves other conversion overrides")
+
 -- Only the former main profile is migrated, once, for existing installations.
 ZwykValuesDB = {profiles={old={name="Old main",weights={}},other={name="Other",weights={}}},
     profileOrder={"old","other"}, options={mainProfileID="old"}}

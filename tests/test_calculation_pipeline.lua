@@ -6,7 +6,7 @@ local function close(actual, expected, message)
     check(type(actual)=="number" and math.abs(actual-expected)<0.0000001,
         (message or "value") .. ": " .. tostring(actual) .. " ~= " .. expected)
 end
-local intellectRank, conversionCalls, itemReads = 3, 0, 0
+local intellectRank, clientBuild, conversionCalls, itemReads = 3, 70300, 0, 0
 local items = {
     [1000]={name="Intellect helmet",intellect=10},
     [1001]={name="Equipped intellect helmet",intellect=5},
@@ -19,7 +19,7 @@ UnitClass=function() return "Paladin","PALADIN" end
 UnitLevel=function() return 60 end
 UnitStat=function() return 100,100,0,0 end
 GetShapeshiftFormID=function() return 0 end
-GetBuildInfo=function() return "1.60.1","70300","Oct 17 2026",16001 end
+GetBuildInfo=function() return "1.60.1",tostring(clientBuild),"Oct 17 2026",16001 end
 GetLocale=function() return "enUS" end
 GetInventoryItemLink=function(_, slot) if slot==1 then return "item:1001" end end
 INTELLECT_BREAK, MANA_PER_INTELLECT = 20, 15
@@ -96,4 +96,29 @@ assert(FW:UpdateProfile(profile.id,{weights={intellect=changedWeight}}))
 close(FW:GetScore("item:1000",profile),47.795,"Apply replaces the weight and refreshes its score")
 close(FW:GetScore("item:1002",profile),37.5,"changing Intellect assumptions leaves flat Mana unchanged")
 check(itemReads==readsAfterParsing,"applying a weight reuses item stats instead of parsing again")
+
+-- Conversion talents change the chosen weight, never the item's raw stats.
+-- Manual Champion rank 2 adds spell damage only, after Kings/Divine Intellect.
+assert(FW:UpdateProfile(profile.id,{weights={spellDamage=2,healing=7},
+    calculationOptions={talentRanks={["110882"]=2}}}))
+local withChampion=calculate("intellect")
+close(withChampion,5.7475,"older Champion rank 2 contributes 40% spell damage, with no healing")
+assert(FW:UpdateProfile(profile.id,{weights={intellect=withChampion}}))
+close(calculate("mana"),0.25,"Mana inverse removes Champion's same spell-damage share")
+close(FW:GetScore("item:1000",profile),57.475,"the item uses the applied talent-aware weight once")
+check(itemReads==readsAfterParsing,"talent edits reuse parsed item stats")
+clientBuild=70425
+local updatedChampion=calculate("intellect")
+close(updatedChampion,5.2635,"new build changes Champion rank 2 to 20% spell damage")
+close(profile.weights.intellect,withChampion,"build changes require recalculation and Apply")
+assert(FW:UpdateProfile(profile.id,{weights={intellect=updatedChampion}}))
+local updatedScore,updatedRecord=FW:GetScore("item:1000",profile)
+close(updatedScore,52.635,"Apply refreshes scores with the new conversion")
+close(calculate("mana"),0.25,"new build forward and inverse coefficients remain consistent")
+close(FW:GetScore("item:1002",profile),37.5,"conversion talents never modify flat-Mana item scoring")
+check(updatedRecord.stats.spellDamage==nil and updatedRecord.stats.healing==nil,
+    "conversion talents do not inject spell damage or healing into parsed item stats")
+local readsAtNewBuild=itemReads
+close(FW:GetScore("item:1000",profile),52.635)
+check(itemReads==readsAtNewBuild,"the new build's parsed stats remain cached")
 print("Calculation-to-item pipeline: " .. checks .. " checks passed.")
