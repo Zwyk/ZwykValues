@@ -1,8 +1,8 @@
-# ZwykValues 0.1.23
+# ZwykValues 0.1.24
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
-Version 0.1.23 adds an attacker-level choice to Armor calculations: player level +0 or +3, defaulting to +3. The selection remains a draft until Apply weights, alongside the calculated weight. Mana, reciprocal conversions, stat-modifier prompts and the revised calculation tooltips introduced in 0.1.22 are retained.
+Version 0.1.24 highlights the source stat fields while you hover a calculation gear. Moving away clears the highlight. The +0/+3 Armor attacker-level prompt and earlier calculation features are retained.
 
 ## Installation
 
@@ -80,7 +80,7 @@ Version 0.1.16 reads elemental wand damage ranges and the client's school-damage
 
 ## Calculate weights from other weights
 
-A small gear immediately left of a supported value box opens its calculation or fills its draft weight. Hover the gear to see a wider, structured tooltip with the formula, source weights, result, assumptions and data source. These buttons calculate **weights**; they do not add derived stats to items or run during item hover. Review the result and click **Apply weights** to save it. Recalculate after a level, form, talent or planned-buff change.
+A small gear immediately left of a supported value box opens its calculation or fills its draft weight. Hover the gear to see a wider, structured tooltip with the formula, source weights, result, assumptions and data source. The source stat fields referenced by that calculation are highlighted, including inputs whose current weight is zero. Highlights clear when the hover ends, another calculation is hovered, or the profile/editor changes; they do not edit values or move the scroll position. These buttons calculate **weights**; they do not add derived stats to items or run during item hover. Review the result and click **Apply weights** to save it. Recalculate after a level, form, talent or planned-buff change.
 
 Supported relationships include Strength from attack power and shield block value, Agility from attack power/armor/critical strike/dodge, Stamina from Health, Intellect from Mana/spell critical strike/native attack-power conversions, Spirit from MP5, and the reverse Health/Mana/MP5 conversions. Mana is a separate resource weight, distinct from MP5. Old profiles start with a zero Mana weight. Native and English/French flat-Mana item stats and enchants are recognized; restoring Mana is not treated as a permanent flat-Mana bonus.
 

@@ -113,6 +113,55 @@ local function selectedProfile()
     end
 end
 
+local function clearCalculationSources()
+    if not UI then return end
+    for _, field in ipairs(UI.calculationSources or {}) do
+        field.sourceHighlight:Hide()
+        field.sourceOutline:Hide()
+        field.text:SetTextColor(unpack(field.sourceLabelColor))
+        field.sourceLabelColor = nil
+    end
+    UI.calculationSources, UI.calculationSourceOwner, UI.calculationSourceProfile = nil, nil, nil
+end
+
+local function highlightCalculationSources(owner, result)
+    clearCalculationSources()
+    local profile = selectedProfile()
+    if not profile then return end
+    local keys = {}
+    local contributions = type(result.contributions) == "table" and result.contributions or result.sources
+    for _, contribution in ipairs(contributions or {}) do
+        if type(contribution.key) == "string" then keys[contribution.key] = true end
+    end
+    UI.calculationSources = {}
+    UI.calculationSourceOwner, UI.calculationSourceProfile = owner, profile
+    for _, field in ipairs(UI.fields) do
+        if keys[field.key] then
+            if not field.sourceHighlight then
+                field.sourceHighlight = field.frame:CreateTexture(nil, "BACKGROUND")
+                field.sourceHighlight:SetAllPoints()
+                field.sourceHighlight:SetColorTexture(0.15, 0.6, 1, 0.15)
+                field.frame.zvCalculationSourceHighlight = field.sourceHighlight
+                field.sourceOutline = CreateFrame("Frame", nil, field.box, BackdropTemplateMixin and "BackdropTemplate" or nil)
+                field.sourceOutline:EnableMouse(false)
+                field.sourceOutline:SetPoint("TOPLEFT", -2, 2)
+                field.sourceOutline:SetPoint("BOTTOMRIGHT", 2, -2)
+                field.sourceOutline:SetFrameLevel(field.box:GetFrameLevel() + 1)
+                if field.sourceOutline.SetBackdrop then
+                    field.sourceOutline:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+                    field.sourceOutline:SetBackdropBorderColor(0.45, 0.8, 1, 1)
+                end
+                field.box.zvCalculationSourceOutline = field.sourceOutline
+            end
+            field.sourceLabelColor = field.text.GetTextColor and { field.text:GetTextColor() } or { 0.85, 0.89, 0.94 }
+            field.text:SetTextColor(0.55, 0.85, 1)
+            field.sourceHighlight:Show()
+            field.sourceOutline:Show()
+            UI.calculationSources[#UI.calculationSources + 1] = field
+        end
+    end
+end
+
 local function hexColor(color)
     color = color or {}
     local function channel(value)
@@ -150,6 +199,7 @@ end
 
 local function refreshEditor(force)
     local profile = selectedProfile()
+    if UI.calculationSourceProfile and UI.calculationSourceProfile ~= profile then clearCalculationSources() end
     if UI.colorPickerSession and (not profile or UI.colorPickerSession.profile ~= profile) then
         closeColorPicker(true)
     end
@@ -472,7 +522,9 @@ local function calculationText(field, result)
 end
 
 local function hideCalculationTooltip(owner)
-    if not UI or not UI.calculationTooltipOwner or (owner and UI.calculationTooltipOwner ~= owner) then return end
+    if not UI then return end
+    if not owner or UI.calculationSourceOwner == owner then clearCalculationSources() end
+    if not UI.calculationTooltipOwner or (owner and UI.calculationTooltipOwner ~= owner) then return end
     local tooltipOwner = UI.calculationTooltipOwner
     UI.calculationTooltipOwner = nil
     if GameTooltip.IsOwned and not GameTooltip:IsOwned(tooltipOwner) then return end
@@ -690,6 +742,7 @@ local function installCalculationButton(field)
     control:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
     control:SetScript("OnEnter", function(self)
         local result = weightCalculation(field, nil, true)
+        highlightCalculationSources(self, result)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText(result.title or ("Calculate " .. field.label .. " weight"), 1, 0.82, 0)
         for _, section in ipairs(calculationSections(field, result, true)) do

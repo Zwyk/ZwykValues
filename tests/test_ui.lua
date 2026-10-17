@@ -79,6 +79,7 @@ function methods:GetText() return self.text end
 function methods:SetFont(_, size) self.fontSize = size end
 function methods:GetFont() return "font", self.fontSize end
 function methods:SetTextColor(...) self.color = {...} end
+function methods:GetTextColor() return table.unpack(self.color or {1, 1, 1, 1}) end
 function methods:SetColorTexture(...) self.color = {...} end
 function methods:SetTexture(texture) self.texture = texture end
 function methods:SetChecked(value) self.checked = value end
@@ -683,7 +684,29 @@ GameTooltip.AddDoubleLine = function(_, left, right, ...)
     calculatorDoubleLines[#calculatorDoubleLines + 1] = { left = left, right = right, colors = { ... } }
 end
 GameTooltip.SetMinimumWidth = function(_, width, reflow) calculatorWidths[#calculatorWidths + 1] = { width, reflow } end
+local function sourceHighlighted(text)
+    local box = weightBox(text)
+    local row, outline = box.parent.zvCalculationSourceHighlight, box.zvCalculationSourceOutline
+    return row and row:IsShown() and outline and outline:IsShown() or false
+end
+local attackBox = weightBox("Attack power")
+local attackLabel = attackBox.parent.children[1]
+local originalAttackColor = { attackLabel:GetTextColor() }
+attackLabel:SetTextColor(0.2, 0.3, 0.4, 0.7)
+local draftAttack, draftFocus, draftScroll = attackBox:GetText(), attackBox.focused, ZwykValuesStatsScroll:GetVerticalScroll()
+local actualCalculation, hoverCalculations = FW.GetDerivedWeightOptions, 0
+FW.GetDerivedWeightOptions = function(self, ...)
+    hoverCalculations = hoverCalculations + 1
+    return actualCalculation(self, ...)
+end
 gear("strength"):Fire("OnEnter")
+FW.GetDerivedWeightOptions = actualCalculation
+equal(hoverCalculations, 1, "highlighting reuses the existing hover calculation")
+check(sourceHighlighted("Attack power") and sourceHighlighted("Block value"), "Strength hover highlights its source rows and numeric fields")
+check(not sourceHighlighted("Intellect") and not sourceHighlighted("Strength"), "Strength hover leaves unrelated and target fields unchanged")
+equal(attackBox:GetText(), draftAttack, "hover highlighting preserves draft text")
+equal(attackBox.focused, draftFocus, "hover highlighting does not move keyboard focus")
+equal(ZwykValuesStatsScroll:GetVerticalScroll(), draftScroll, "hover highlighting does not scroll the editor")
 equal(tooltipTitle, "Calculate Strength", "gear tooltip identifies the target attribute")
 check(table.concat(calculatorLines, "\n"):lower():find("paladin", 1, true), "gear tooltip includes player class")
 check(table.concat(calculatorLines, "\n"):find("29", 1, true), "gear tooltip includes player level")
@@ -705,12 +728,43 @@ local resultColumn
 for _, columns in ipairs(calculatorDoubleLines) do if columns.left == "Calculated weight" then resultColumn = columns end end
 check(resultColumn and resultColumn.colors[2] > resultColumn.colors[1], "calculation tooltip highlights the final result in green")
 gear("strength"):Fire("OnLeave")
+check(not sourceHighlighted("Attack power") and not sourceHighlighted("Block value"), "leaving the cog clears source highlights")
+equal(attackLabel.color[1], 0.2, "source highlight restores the original label color")
+equal(attackLabel.color[4], 0.7, "source highlight preserves the original label alpha")
+attackLabel:SetTextColor(table.unpack(originalAttackColor))
 equal(calculatorWidths[#calculatorWidths][1], 0, "leaving a calculation gear restores the shared tooltip width")
 equal(calculatorWidths[#calculatorWidths][2], false, "width cleanup releases forced wrapping")
+userText(attackBox, "0")
+gear("strength"):Fire("OnEnter")
+check(sourceHighlighted("Attack power"), "zero-weight source inputs are still highlighted")
+gear("mana"):Fire("OnEnter")
+check(sourceHighlighted("Intellect") and sourceHighlighted("Critical strike (%)"), "Mana hover highlights each modeled inverse input")
+check(not sourceHighlighted("Attack power") and not sourceHighlighted("Block value"), "switching cogs replaces earlier highlights")
+local actualUnitClass = UnitClass
+UnitClass = function() return "Rogue", "ROGUE" end
+gear("strength"):Fire("OnEnter")
+check(sourceHighlighted("Attack power") and not sourceHighlighted("Block value"), "highlighted dependencies follow the current player class")
+UnitClass = actualUnitClass
+gear("strength"):Fire("OnLeave")
+local oldUnitArmor, oldPaperDoll = UnitArmor, C_PaperDollInfo
+UnitArmor = function() return 1000, 1000 end
+C_PaperDollInfo = { GetArmorEffectiveness = function() return 0.75 end }
+gear("armor"):Fire("OnEnter")
+check(sourceHighlighted("Dodge (%)"), "an explicitly listed zero-rate input remains highlighted at the Armor cap")
+gear("armor"):Fire("OnLeave")
+UnitArmor, C_PaperDollInfo = oldUnitArmor, oldPaperDoll
+userText(attackBox, "3")
+gear("strength"):Fire("OnEnter")
+find(function(control) return control.kind == "Button" and control.profileID == profile.id end):Fire("OnClick")
+check(not sourceHighlighted("Attack power"), "changing profiles clears source highlights")
+find(function(control) return control.kind == "Button" and control.profileID == calculationProfile.id end):Fire("OnClick")
+userText(attackBox, "3")
+userText(weightBox("Block value"), "4")
 gear("strength"):Fire("OnEnter")
 local stolenWidths, stolenHides = #calculatorWidths, calculationTooltipHides
 GameTooltip:SetOwner(UIParent, "ANCHOR_RIGHT")
 gear("strength"):Fire("OnHide")
+check(not sourceHighlighted("Attack power"), "source highlights clear even when another addon owns the tooltip")
 equal(#calculatorWidths, stolenWidths, "gear cleanup leaves another tooltip owner's layout alone")
 equal(calculationTooltipHides, stolenHides, "gear cleanup never hides another owner's tooltip")
 gear("strength"):Fire("OnClick")
@@ -861,7 +915,9 @@ gear("spirit"):Fire("OnClick")
 check(not attackerSelector:IsShown(), "reusing the calculation prompt for Spirit hides attacker-level choices")
 equal(calculationDialog.sliders[3]:GetValue(), 0, "saved user regeneration overrides talent defaults")
 local staleCalculation = calculationDialog.use:GetScript("OnClick")
+gear("strength"):Fire("OnEnter")
 FW.UI:Hide()
+check(not sourceHighlighted("Attack power"), "closing the editor clears source highlights")
 check(not calculationDialog:IsShown(), "closing the editor closes the calculation prompt")
 FW:ShowUI()
 
@@ -1157,8 +1213,10 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     separate(arrowControls[2], arrowControls[3], "roll and chat arrow toggles do not overlap")
 end
 click("Item filters")
+gear("strength"):Fire("OnEnter")
 local remaining = FW:GetProfiles()
 for _, existing in ipairs(remaining) do FW:DeleteProfile(existing.id) end
+check(not sourceHighlighted("Attack power"), "removing every profile clears disabled source fields")
 check(not byText("Item filters", "Button").enabled, "filter button is disabled without a profile")
 check(not swatch.enabled, "color picker square is disabled without a profile")
 check(not iconControl.enabled, "icon picker is disabled without a profile")
