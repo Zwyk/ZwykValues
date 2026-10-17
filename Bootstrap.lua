@@ -1,6 +1,6 @@
 local addonName, FW = ...
 _G.ZwykValues = FW
-FW.version = "0.1.22"
+FW.version = "0.1.23"
 
 function FW:Print(message)
     local text = "|cff80ccffZwykValues:|r " .. tostring(message)

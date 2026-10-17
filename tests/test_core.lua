@@ -439,6 +439,8 @@ local optionProfile = FW.DB.profiles[firstUpgrade.id]
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={combatShare=0,castingShare=1}}))
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={whileCastingRegen=0.3}}))
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={kings=false,useTalents=true}}))
+equal(optionProfile.calculationOptions.attackerLevelOffset, nil, "old calculator preferences leave the new attacker-level default unset")
+assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={attackerLevelOffset=0}}))
 equal(optionProfile.calculationOptions.combatShare, 0, "partial calculation preference changes retain other ratios")
 equal(optionProfile.calculationOptions.castingShare, 1)
 equal(optionProfile.calculationOptions.whileCastingRegen, 0.3)
@@ -448,6 +450,7 @@ local calculationRevision = optionProfile.revision
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={castingShare=0.8}}))
 equal(optionProfile.calculationOptions.kings, false, "ratio edits retain the Kings choice")
 equal(optionProfile.calculationOptions.useTalents, true, "ratio edits retain talent assumptions")
+equal(optionProfile.calculationOptions.attackerLevelOffset, 0, "partial updates preserve a same-level attacker choice")
 equal(optionProfile.revision, calculationRevision, "calculator assumptions do not change a weight until Apply")
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions={castingShare=1}}))
 local optionCopy = assert(FW:CopyProfile(optionProfile.id))
@@ -455,7 +458,8 @@ optionCopy.calculationOptions.combatShare = 0.6
 equal(optionProfile.calculationOptions.combatShare, 0, "copies do not share calculator preferences")
 equal(optionCopy.calculationOptions.kings, false, "copies preserve an explicit Kings opt-out")
 equal(optionCopy.calculationOptions.useTalents, true)
-assert(FW:UpdateProfile(optionCopy.id, {calculationOptions={kings=true,useTalents=false}}))
+equal(optionCopy.calculationOptions.attackerLevelOffset, 0, "copying retains an explicit zero attacker offset")
+assert(FW:UpdateProfile(optionCopy.id, {calculationOptions={kings=true,useTalents=false,attackerLevelOffset=3}}))
 equal(optionCopy.calculationOptions.kings, true)
 equal(optionCopy.calculationOptions.useTalents, false, "an explicit talent opt-out is supported")
 equal(optionProfile.calculationOptions.useTalents, true, "copies own their talent preferences")
@@ -463,12 +467,16 @@ local optionImport = assert(FW:ImportProfile(assert(FW:ExportProfile(optionProfi
 equal(optionImport.calculationOptions.castingShare, 1, "calculator ratios round-trip with full profiles")
 equal(optionImport.calculationOptions.kings, false, "Kings opt-outs round-trip with full profiles")
 equal(optionImport.calculationOptions.useTalents, true)
+equal(optionImport.calculationOptions.attackerLevelOffset, 0, "a same-level attacker choice round-trips with profiles")
 local optionsOffImport = assert(FW:ImportProfile(assert(FW:ExportProfile(optionCopy.id))))
 equal(optionsOffImport.calculationOptions.kings, true)
 equal(optionsOffImport.calculationOptions.useTalents, false, "talent opt-outs survive profile exchange")
+equal(optionsOffImport.calculationOptions.attackerLevelOffset, 3, "a boss attacker choice round-trips with profiles")
 for _, badOptions in ipairs({{combatShare=-0.1},{castingShare=1.1},{whileCastingRegen="30"},
     {unknown=0.5}, json.null, {combatShare=math.huge}, {kings=1}, {kings="true"}, {kings=json.null},
-    {useTalents=1}, {useTalents="false"}, {useTalents=json.null}, {divineStrengthRank=5}}) do
+    {useTalents=1}, {useTalents="false"}, {useTalents=json.null}, {divineStrengthRank=5},
+    {attackerLevelOffset=false}, {attackerLevelOffset=true}, {attackerLevelOffset="3"},
+    {attackerLevelOffset=1}, {attackerLevelOffset=1.5}, {attackerLevelOffset=json.null}}) do
     equal(FW:UpdateProfile(optionProfile.id, {name="Must not change",calculationOptions=badOptions}), nil)
     equal(optionProfile.name, oldName, "invalid calculator preferences remain atomic")
 end
@@ -477,11 +485,17 @@ invalidOptionEnvelope.calculationOptions.kings = "true"
 local beforeInvalidImport = #FW:GetProfiles()
 equal(FW:ImportProfile(assert(json.Encode(invalidOptionEnvelope))), nil, "imports validate Kings assumptions before creating profiles")
 equal(#FW:GetProfiles(), beforeInvalidImport)
+invalidOptionEnvelope.calculationOptions.kings = false
+invalidOptionEnvelope.calculationOptions.attackerLevelOffset = -3
+equal(FW:ImportProfile(assert(json.Encode(invalidOptionEnvelope))), nil, "imports reject unsupported attacker levels atomically")
+equal(#FW:GetProfiles(), beforeInvalidImport)
 FW.DB = nil
 FW:Initialize()
 optionProfile = FW.DB.profiles[optionProfile.id]
 equal(optionProfile.calculationOptions.kings, false, "reload preserves an explicit Kings choice")
 equal(optionProfile.calculationOptions.useTalents, true, "reload preserves the talent preference without freezing ranks")
+equal(optionProfile.calculationOptions.attackerLevelOffset, 0, "reload preserves a same-level attacker choice")
+equal(FW.DB.profiles[optionCopy.id].calculationOptions.attackerLevelOffset, 3, "reload preserves a boss attacker choice")
 assert(FW:UpdateProfile(optionProfile.id, {calculationOptions=false}))
 equal(optionProfile.calculationOptions, nil, "clearing preferences restores live calculator defaults")
 

@@ -379,7 +379,7 @@ local function useCalculatedWeight(field, result, options, params)
     if options then
         local draft = {}
         for key, value in pairs(UI.draftCalculationOptions or {}) do draft[key] = value end
-        for _, key in ipairs({ "combatShare", "castingShare", "whileCastingRegen", "kings", "useTalents" }) do
+        for _, key in ipairs({ "combatShare", "castingShare", "whileCastingRegen", "kings", "useTalents", "attackerLevelOffset" }) do
             if params and params[key] then draft[key] = options[key] end
         end
         UI.draftCalculationOptions = draft
@@ -453,7 +453,8 @@ local function calculationSections(field, result, withFooter)
     end
     if withFooter then
         space()
-        line((field.key == "spirit" or field.key == "mp5") and "Click to choose ratios. Apply weights saves changes." or
+        line(result.params and result.params.attackerLevelOffset and "Click to choose attacker level. Apply weights saves changes." or
+            (field.key == "spirit" or field.key == "mp5") and "Click to choose ratios. Apply weights saves changes." or
             (hasCalculationParams(result) and "Click to review bonuses. Apply weights saves changes." or
                 (result.footer or "Click to fill this weight. Apply weights saves changes.")), "context")
     end
@@ -502,6 +503,22 @@ local function showCalculationPrompt(field)
         dialog.help:SetHeight(42)
         dialog.help:SetJustifyV("TOP")
         dialog.sliders, dialog.toggles = {}, {}
+        dialog.attackerSelector = CreateFrame("Frame", nil, dialog)
+        dialog.attackerSelector:SetSize(484, 62)
+        dialog.attackerSelector.title = label(dialog.attackerSelector, "Attacker level", 11, { 0.78, 0.85, 1 })
+        dialog.attackerSelector.title:SetPoint("TOPLEFT")
+        dialog.attackerSelector.choices = {}
+        for index, offset in ipairs({ 0, 3 }) do
+            local choice = CreateFrame("CheckButton", nil, dialog.attackerSelector, "UICheckButtonTemplate")
+            choice:SetSize(24, 24)
+            choice:SetPoint("TOPLEFT", (index - 1) * 242, -25)
+            choice.caption = label(choice, "", 11, { 0.85, 0.89, 0.94 })
+            choice.caption:SetPoint("LEFT", choice, "RIGHT", 3, 0)
+            choice.caption:SetWidth(210)
+            choice.caption:SetHeight(28)
+            choice.offset = offset
+            dialog.attackerSelector.choices[offset] = choice
+        end
         dialog.detailsScroll = CreateFrame("ScrollFrame", "ZwykValuesCalculationDetails", dialog, "UIPanelScrollFrameTemplate")
         dialog.detailsScroll:SetPoint("TOPLEFT", 18, -280)
         dialog.detailsScroll:SetPoint("BOTTOMRIGHT", -37, 62)
@@ -525,7 +542,8 @@ local function showCalculationPrompt(field)
     session.params = initialResult.params or {}
     UI.calculationSession = session
     dialog.title:SetText("Calculate " .. field.label .. " weight")
-    dialog.help:SetText((session.params.castingShare and "Adjust regeneration ratios and stat bonuses." or "Choose the stat bonuses to include.") ..
+    dialog.help:SetText((session.params.attackerLevelOffset and "Choose the attacker's level for armor mitigation." or
+        session.params.castingShare and "Adjust regeneration ratios and stat bonuses." or "Choose the stat bonuses to include.") ..
         " Calculated weights stay unsaved until Apply weights.")
     local definitions = {
         { key = "combatShare", text = "Time in combat", help = "Out of combat uses full Spirit regeneration; time in combat uses the casting assumptions below." },
@@ -539,6 +557,14 @@ local function showCalculationPrompt(field)
         for key, control in pairs(dialog.toggles) do
             if result.paramLabels and result.paramLabels[key] then control.caption:SetText(result.paramLabels[key]) end
             if control.hintTitle then hint(control, control.hintTitle, result.paramHelp and result.paramHelp[key] or control.defaultHint) end
+        end
+        if session.params.attackerLevelOffset then
+            local playerLevel = result.armorContext and result.armorContext.playerLevel or result.context and result.context.level
+            for offset, choice in pairs(dialog.attackerSelector.choices) do
+                choice:SetChecked(session.options.attackerLevelOffset == offset)
+                choice.caption:SetText((offset == 0 and "Same level (+0)" or "Boss (+3)") ..
+                    (finite(playerLevel) and (" - Level " .. (playerLevel + offset)) or ""))
+            end
         end
         local lines = calculationText(field, result)
         dialog.details:SetText(table.concat(lines, "\n"))
@@ -618,6 +644,22 @@ local function showCalculationPrompt(field)
                 refresh()
             end)
             hint(slider, definition.text, definition.help)
+        end
+    end
+    dialog.attackerSelector:SetShown(session.params.attackerLevelOffset and true or false)
+    if session.params.attackerLevelOffset then
+        dialog.attackerSelector:ClearAllPoints()
+        dialog.attackerSelector:SetPoint("TOPLEFT", 18, -nextY)
+        nextY = nextY + 65
+        for offset, choice in pairs(dialog.attackerSelector.choices) do
+            choice:SetScript("OnClick", function()
+                if UI.calculationSession ~= session then return end
+                session.options.attackerLevelOffset = offset
+                refresh()
+            end)
+            hint(choice, "Attacker level " .. (offset == 0 and "+0" or "+3"),
+                offset == 0 and "Calculate armor mitigation against an attacker at your current level." or
+                    "Calculate armor mitigation against an attacker three levels above your current level.")
         end
     end
     local detailsTop = nextY + 10

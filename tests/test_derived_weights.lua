@@ -250,8 +250,35 @@ local armorResult=calculate("armor",{dodge=10})
 close(armorResult.value,0.2,"One pp DR is priced as one pp Dodge")
 equal(armorCalls[1][1],1000,"Use effective Armor, second UnitArmor return")
 equal(armorCalls[2][1],1001)
-equal(armorCalls[1][2],58,"Use player effective level as default attacker level")
-equal(armorResult.armorContext.attackerLevel,58)
+equal(armorCalls[1][2],61,"Default attacker is three levels above player effective level")
+equal(armorResult.armorContext.playerLevel,58)
+equal(armorResult.armorContext.attackerLevel,61)
+equal(armorResult.armorContext.attackerLevelOffset,3)
+equal(armorResult.options.attackerLevelOffset,3)
+check(armorResult.params.attackerLevelOffset,"Armor gear opens attacker-level prompt")
+equal(FW:GetDerivedWeightDefaults().attackerLevelOffset,3)
+equal(FW:GetDerivedWeightDefaults({calculationOptions={attackerLevelOffset=0}}).attackerLevelOffset,0,"Saved same-level choice stays zero")
+equal(FW:GetDerivedWeightDefaults({calculationOptions={attackerLevelOffset=3}}).attackerLevelOffset,3)
+equal(FW:GetDerivedWeightDefaults({calculationOptions={attackerLevelOffset=1}}).attackerLevelOffset,3,"Invalid stored offset is not used by defaults")
+local sameLevelArmor=calculate("armor",{dodge=10},{attackerLevelOffset=0})
+equal(armorCalls[#armorCalls][2],58,"Explicit +0 uses effective level exactly")
+equal(sameLevelArmor.armorContext.attackerLevelOffset,0)
+equal(sameLevelArmor.options.attackerLevelOffset,0)
+check(sameLevelArmor.contextText:find("attacker level 58 (+0)",1,true))
+calculate("armor",{dodge=10},{attackerLevelOffset=3})
+equal(armorCalls[#armorCalls][2],61,"Explicit +3 matches default")
+UnitEffectiveLevel=nil
+playerLevel=62
+local changedLevelArmor=calculate("armor",{dodge=10})
+equal(changedLevelArmor.armorContext.playerLevel,62)
+equal(changedLevelArmor.armorContext.attackerLevel,65,"Default follows current level instead of freezing attacker level")
+calculate("armor",{dodge=10},{attackerLevelOffset=0})
+equal(armorCalls[#armorCalls][2],62,"Same-level setting follows level changes")
+playerLevel=60
+UnitEffectiveLevel=function() return 58 end
+for _, invalidOffset in ipairs({1,-3,3.5,"3",true,math.huge}) do
+    equal(FW:GetDerivedWeightOptions("armor",{dodge=10},{attackerLevelOffset=invalidOffset}).available,false,"Only offset0 or3 is supported")
+end
 has(armorResult.assumptions,"1 percentage point of physical damage reduction")
 has(armorResult.assumptions,"form/talent Armor multipliers are not included")
 check(armorResult.contextText:find("1000 Armor",1,true))
@@ -265,7 +292,12 @@ equal(#capped.contributions,1,"Cap result explains the zero contribution")
 C_PaperDollInfo.GetArmorEffectiveness=function() error("unavailable") end
 equal(FW:GetDerivedWeightOptions("armor",{dodge=10}).available,false,"Native API errors do not use a Vanilla formula")
 C_PaperDollInfo=nil
-equal(FW:GetDerivedWeightOptions("armor",{dodge=10}).available,false,"Missing Forever API does not invent current Armor formula")
+local missingArmorAPI=FW:GetDerivedWeightOptions("armor",{dodge=10},{attackerLevelOffset=0})
+equal(missingArmorAPI.available,false,"Missing Forever API does not invent current Armor formula")
+check(missingArmorAPI.params.attackerLevelOffset,"Failed preview still exposes level selector")
+equal(missingArmorAPI.armorContext.playerLevel,58,"Failed API preserves effective player level for selector captions")
+equal(missingArmorAPI.armorContext.attackerLevel,58)
+equal(missingArmorAPI.options.attackerLevelOffset,0)
 C_PaperDollInfo={GetArmorEffectiveness=function(armor) return armor==1000 and 0.4 or 0.3 end}
 equal(FW:GetDerivedWeightOptions("armor",{dodge=10}).available,false,"Negative mitigation slope is rejected")
 C_PaperDollInfo.GetArmorEffectiveness=function() return 20 end

@@ -1,8 +1,8 @@
-# ZwykValues 0.1.22
+# ZwykValues 0.1.23
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
-Version 0.1.22 adds Mana, reciprocal weight calculations and optional stat modifiers. Calculation gears now sit immediately to the left of their value boxes, and their tooltips separate the formula, input weights, result and assumptions. The comparison picker retains the native check-mark texture added in 0.1.21.
+Version 0.1.23 adds an attacker-level choice to Armor calculations: player level +0 or +3, defaulting to +3. The selection remains a draft until Apply weights, alongside the calculated weight. Mana, reciprocal conversions, stat-modifier prompts and the revised calculation tooltips introduced in 0.1.22 are retained.
 
 ## Installation
 
@@ -90,7 +90,7 @@ Relevant calculation dialogs offer **Blessing of Kings (+10%)** and **talent sta
 
 Weapon DPS also calculates from attack power: the native autoattack conversion is normally 14 AP per DPS, so an AP weight of 0.1 produces a DPS weight of 1.4. The reverse AP calculation uses the same coefficient. Ranged equivalents apply to AP-scaled ranged weapons, excluding wands. These are autoattack equivalences, not rotation simulations.
 
-Base Armor can calculate from the Dodge weight using the requested assumption that one percentage point of Dodge has the same value as one percentage point of physical damage reduction from Armor. It asks the native Forever mitigation API for the gain from the next effective Armor point at your current effective Armor against a same-level attacker. The tooltip shows that baseline. This is a local estimate: it assumes one base Armor point adds one effective Armor point, does not model form/talent Armor multipliers, and does not treat Dodge and Armor as equivalent against every attack. An unreadable native mitigation API makes this calculation unavailable instead of substituting an unverified Armor formula.
+Base Armor can calculate from the Dodge weight using the requested assumption that one percentage point of Dodge has the same value as one percentage point of physical damage reduction from Armor. It asks the native Forever mitigation API for the gain from the next effective Armor point at your current effective Armor against the chosen attacker level. The Armor calculation dialog offers **player level +0** and **player level +3**, defaulting to **+3**. The offset follows your effective player level, and the tooltip shows the resulting attacker level. Choosing a level updates the preview; the choice and weight save together with Apply weights. This is a local estimate: it assumes one base Armor point adds one effective Armor point, does not model form/talent Armor multipliers, and does not treat Dodge and Armor as equivalent against every attack. An unreadable native mitigation API makes this calculation unavailable instead of substituting an unverified Armor formula.
 
 Native Forever conversion functions take priority and use the difference for the additional stat point. Where they are unavailable, the helper identifies its verified base coefficient or class/level Vanilla fallback. The fallback crit tables cover levels 1–60; an unavailable weighted conversion prevents applying the result. The gear tooltip identifies supported talent bonuses and limitations. These conversions are separate from item secondary-stat parsing: item weights remain per **1 percentage point**, and raw rating still receives no guessed conversion.
 

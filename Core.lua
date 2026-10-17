@@ -263,7 +263,7 @@ end
 local function validCalculationOptions(changes, current)
     if not plainObject(changes) then return nil, "Calculation options must be a JSON object." end
     local result = {}
-    for _, key in ipairs({"combatShare", "castingShare", "whileCastingRegen", "kings", "useTalents"}) do
+    for _, key in ipairs({"combatShare", "castingShare", "whileCastingRegen", "kings", "useTalents", "attackerLevelOffset"}) do
         if current then result[key] = current[key] end
     end
     for key, value in pairs(changes) do
@@ -271,6 +271,10 @@ local function validCalculationOptions(changes, current)
             if type(value) ~= "boolean" then return nil, "Blessing of Kings must be true or false." end
         elseif key == "useTalents" then
             if type(value) ~= "boolean" then return nil, "Talent modifiers must be true or false." end
+        elseif key == "attackerLevelOffset" then
+            if not finite(value) or (value ~= 0 and value ~= 3) then
+                return nil, "Attacker level offset must be 0 or 3."
+            end
         elseif key == "combatShare" or key == "castingShare" or key == "whileCastingRegen" then
             if not finite(value) or value < 0 or value > 1 then
                 return nil, "Calculation ratios must be numbers between 0 and 1."

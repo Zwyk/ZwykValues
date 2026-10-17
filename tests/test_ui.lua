@@ -802,7 +802,63 @@ equal(calculationProfile.calculationOptions.castingShare, 1, "Apply saves chosen
 equal(calculationProfile.calculationOptions.whileCastingRegen, 0, "Apply saves chosen retained regeneration")
 equal(calculationProfile.calculationOptions.kings, false, "Apply preserves an explicitly disabled Kings bonus")
 equal(calculationProfile.calculationOptions.useTalents, false, "Apply preserves explicitly disabled talent bonuses")
+
+-- Armor compares mitigation at an explicitly selected attacker level.
+local effectivePlayerLevel, armorLevels = 31, {}
+UnitEffectiveLevel = function() return effectivePlayerLevel end
+UnitArmor = function() return 1000, 1000, 1000, 0, 0 end
+C_PaperDollInfo = { GetArmorEffectiveness = function(armor, level)
+    armorLevels[#armorLevels + 1] = level
+    return armor / (armor + level * 100)
+end }
+userText(weightBox("Dodge (%)"), "10")
+local armorBox = weightBox("Base armor")
+gear("armor"):Fire("OnEnter")
+check(table.concat(calculatorLines, "\n"):find("Click to choose attacker level", 1, true), "Armor tooltip explains its attacker-level prompt")
+gear("armor"):Fire("OnLeave")
+gear("armor"):Fire("OnClick")
+local attackerSelector = calculationDialog.attackerSelector
+check(calculationDialog:IsShown() and attackerSelector:IsShown(), "Armor gear opens the attacker-level selector")
+check(attackerSelector.choices[3]:GetChecked() and not attackerSelector.choices[0]:GetChecked(), "Armor attacker level defaults to +3")
+equal(armorLevels[#armorLevels], 34, "default Armor preview uses effective player level plus three")
+check(attackerSelector.choices[0].caption:GetText():find("Level 31", 1, true), "same-level option displays effective player level")
+check(attackerSelector.choices[3].caption:GetText():find("Level 34", 1, true), "boss option displays effective player level plus three")
+for _, control in pairs(calculationDialog.toggles) do check(not control:IsShown(), "Armor prompt hides stat-bonus checkboxes") end
+for _, slider in ipairs(calculationDialog.sliders) do check(not slider:IsShown(), "Armor prompt hides regeneration sliders") end
+local bossPreview = calculationDialog.details:GetText()
+attackerSelector.choices[0]:SetChecked(true)
+attackerSelector.choices[0]:Fire("OnClick")
+check(attackerSelector.choices[0]:GetChecked() and not attackerSelector.choices[3]:GetChecked(), "attacker-level choices are mutually exclusive")
+equal(armorLevels[#armorLevels], 31, "selecting +0 recalculates with the same-level attacker")
+check(calculationDialog.details:GetText() ~= bossPreview, "selecting attacker level updates the visible preview")
+calculationDialog.cancel:Fire("OnClick")
+equal(calculationProfile.calculationOptions.attackerLevelOffset, nil, "Cancel does not save an attacker-level choice")
+equal(tonumber(armorBox:GetText()), 0, "Cancel does not fill the Armor weight")
+gear("armor"):Fire("OnClick")
+check(attackerSelector.choices[3]:GetChecked(), "Cancel discards the unaccepted attacker-level choice")
+attackerSelector.choices[0]:SetChecked(true)
+attackerSelector.choices[0]:Fire("OnClick")
+calculationDialog.use:Fire("OnClick")
+check(tonumber(armorBox:GetText()) > 0, "Use fills the calculated Armor draft")
+equal(calculationProfile.weights.armor, 0, "Use leaves saved Armor weights unchanged")
+equal(calculationProfile.calculationOptions.attackerLevelOffset, nil, "Use keeps the attacker-level setting as a draft")
+effectivePlayerLevel = 32
+gear("armor"):Fire("OnClick")
+check(attackerSelector.choices[0]:GetChecked(), "reopening keeps an accepted draft attacker-level choice")
+equal(armorLevels[#armorLevels], 32, "reopening refreshes the actual player level")
+check(attackerSelector.choices[3].caption:GetText():find("Level 35", 1, true), "attacker-level labels refresh after a level change")
+calculationDialog.cancel:Fire("OnClick")
+click("Apply weights")
+equal(calculationProfile.calculationOptions.attackerLevelOffset, 0, "Apply saves an explicitly chosen +0 attacker offset")
+check(calculationProfile.weights.armor > 0, "Apply saves the calculated Armor weight")
+gear("armor"):Fire("OnClick")
+check(attackerSelector.choices[0]:GetChecked(), "saved +0 selection survives reopening")
+attackerSelector.choices[3]:SetChecked(true)
+attackerSelector.choices[3]:Fire("OnClick")
+calculationDialog.cancel:Fire("OnClick")
+equal(calculationProfile.calculationOptions.attackerLevelOffset, 0, "Cancel preserves an existing saved attacker offset")
 gear("spirit"):Fire("OnClick")
+check(not attackerSelector:IsShown(), "reusing the calculation prompt for Spirit hides attacker-level choices")
 equal(calculationDialog.sliders[3]:GetValue(), 0, "saved user regeneration overrides talent defaults")
 local staleCalculation = calculationDialog.use:GetScript("OnClick")
 FW.UI:Hide()
@@ -1015,6 +1071,13 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     within(calculationDialog.help, calculationDialog, "calculation help fits its prompt")
     within(calculationDialog.detailsScroll, calculationDialog, "long conversion formulas stay in a scrollable area")
     within(calculationDialog.use, calculationDialog, "calculated-weight action fits its prompt")
+    within(attackerSelector, calculationDialog, "attacker-level selector fits the calculation prompt")
+    within(attackerSelector.title, attackerSelector, "attacker-level heading fits the selector")
+    for _, choice in pairs(attackerSelector.choices) do
+        within(choice, attackerSelector, "attacker-level choice fits its selector")
+        within(choice.caption, attackerSelector, "attacker-level caption fits its selector")
+    end
+    separate(attackerSelector.choices[0].caption, attackerSelector.choices[3], "attacker-level choices do not overlap")
     separate(calculationDialog.detailsScroll, calculationDialog.use, "conversion details leave room for calculation action")
     for _, slider in ipairs(calculationDialog.sliders) do
         within(slider, calculationDialog, "regeneration slider fits its prompt")

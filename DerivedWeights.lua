@@ -228,7 +228,7 @@ local function traitRank(node)
 end
 
 function FW:GetDerivedWeightDefaults(profile)
-    local defaults={ combatShare=1, castingShare=0.8, whileCastingRegen=0, kings=false, useTalents=true,
+    local defaults={ combatShare=1, castingShare=0.8, whileCastingRegen=0, kings=false, useTalents=true, attackerLevelOffset=3,
         regenSource="Casting-regeneration talent data is unavailable; adjust if needed." }
     local current=context({})
     local talent=current.class and castingTalents[current.class]
@@ -246,6 +246,9 @@ function FW:GetDerivedWeightDefaults(profile)
         end
         for _, key in ipairs({"kings","useTalents"}) do
             if readable(saved[key]) and type(saved[key])=="boolean" then defaults[key]=saved[key] end
+        end
+        if finite(saved.attackerLevelOffset) and (saved.attackerLevelOffset==0 or saved.attackerLevelOffset==3) then
+            defaults.attackerLevelOffset=saved.attackerLevelOffset
         end
         if finite(saved.whileCastingRegen) then defaults.regenSource="Saved casting-regeneration setting." end
     end
@@ -373,23 +376,28 @@ end
 
 local function armorRate(ctx, options)
     if not ctx.live then return nil, nil, "Armor conversion requires the current character." end
-    local _, armor=call(UnitArmor, "player")
-    if not finite(armor) or armor<0 then return nil, nil, "Current effective Armor is unavailable." end
+    local playerLevel=call(UnitEffectiveLevel, "player")
+    if not finite(playerLevel) or playerLevel<1 then playerLevel=ctx.level end
+    local offset=options.attackerLevelOffset
+    if not readable(offset) then return nil, nil, "Attacker level offset is unavailable." end
+    if offset==nil then offset=3 end
+    if not finite(offset) or (offset~=0 and offset~=3) then return nil, nil, "Choose an attacker at your level or three levels higher." end
     local level=options.attackerLevel
     if not readable(level) then return nil, nil, "Attacker level is unavailable." end
-    if level==nil then
-        level=call(UnitEffectiveLevel, "player")
-        if not finite(level) or level<1 then level=ctx.level end
-    end
+    if level==nil then level=playerLevel+offset end
     if not finite(level) or level<1 or level~=math.floor(level) then return nil, nil, "Attacker level must be a positive whole number." end
+    local armorContext={playerLevel=playerLevel,attackerLevel=level,attackerLevelOffset=level-playerLevel,configuredOffset=offset}
+    local _, armor=call(UnitArmor, "player")
+    if not finite(armor) or armor<0 then return nil, nil, "Current effective Armor is unavailable.", armorContext end
+    armorContext.armor=armor
     local fn=C_PaperDollInfo and C_PaperDollInfo.GetArmorEffectiveness
-    if type(fn)~="function" then return nil, nil, "The Forever Armor mitigation API is unavailable." end
+    if type(fn)~="function" then return nil, nil, "The Forever Armor mitigation API is unavailable.", armorContext end
     local before, after=call(fn, armor, level), call(fn, armor+1, level)
     if not finite(before) or not finite(after) or before<0 or after<before or after>1 then
-        return nil, nil, "The Forever Armor mitigation API did not return a readable conversion."
+        return nil, nil, "The Forever Armor mitigation API did not return a readable conversion.", armorContext
     end
-    return (after-before)*100, "Live Forever Armor mitigation API", nil,
-        { armor=armor, attackerLevel=level, reduction=before*100 }
+    armorContext.reduction=before*100
+    return (after-before)*100, "Live Forever Armor mitigation API", nil, armorContext
 end
 
 local function sourceLabel(source)
@@ -419,6 +427,14 @@ function FW:GetDerivedWeightOptions(key, weights, options)
     result.modifiers=modifiers
     result.paramLabels={}
     result.paramHelp={}
+    if key=="armor" then
+        result.params.attackerLevelOffset=true
+        result.paramLabels.attackerLevelOffset="Attacker level"
+        result.paramHelp.attackerLevelOffset="Use your current effective level, or three levels higher."
+        local chosen=defaults.attackerLevelOffset
+        if finite(options.attackerLevelOffset) and (options.attackerLevelOffset==0 or options.attackerLevelOffset==3) then chosen=options.attackerLevelOffset end
+        result.options={attackerLevelOffset=chosen}
+    end
     if modifiers then
         result.params.kings=true
         result.params.useTalents=modifiers.supported
@@ -601,10 +617,12 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         else fail("This class cannot use an AP-scaled ranged weapon.") end
     elseif key=="armor" then
         local rate, source, failure, armorContext=armorRate(ctx, options)
+        result.armorContext=armorContext
+        if armorContext then result.options.attackerLevelOffset=armorContext.configuredOffset end
         if failure then fail(failure)
         else
-            result.armorContext=armorContext
             result.contextText=result.contextText .. " · " .. number(armorContext.armor) .. " Armor · attacker level " .. armorContext.attackerLevel
+                .. " (" .. (armorContext.attackerLevelOffset>=0 and "+" or "") .. number(armorContext.attackerLevelOffset) .. ")"
             add("dodge", rate, source, "%")
             result.formula="Armor = Dodge x " .. number(rate) .. " percentage points of damage reduction"
             -- add() deliberately skips zero rates. At the cap retain the
