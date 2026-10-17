@@ -80,6 +80,11 @@ local function editBox(parent, width)
     return frame
 end
 
+local function setWeightText(box, text)
+    box:SetText(text)
+    box:SetCursorPosition(0)
+end
+
 local function hint(frame, title, text)
     frame:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -231,7 +236,7 @@ local function refreshEditor(force)
             setEnabled(field.box, true)
             if field.calculate then setEnabled(field.calculate, true) end
             if force or not UI.dirtyWeights then
-                field.box:SetText(tostring((profile.weights or {})[field.key] or 0))
+                setWeightText(field.box, tostring((profile.weights or {})[field.key] or 0))
             end
         end
         UI.editorTitle:SetText("Weights for " .. (profile.name or "profile"))
@@ -245,7 +250,7 @@ local function refreshEditor(force)
         UI.iconNone:Show()
         updateUnitHelp(nil)
         for _, field in ipairs(UI.fields) do
-            field.box:SetText("0")
+            setWeightText(field.box, "0")
             setEnabled(field.box, false)
             if field.calculate then setEnabled(field.calculate, false) end
         end
@@ -433,7 +438,7 @@ end
 local function useCalculatedWeight(field, result, options, params, rankChanges, restoreCurrent)
     if not selectedProfile() or not result.available or not finite(result.value) then return end
     UI.loading = true
-    field.box:SetText(string.format("%.8g", result.value))
+    setWeightText(field.box, string.format("%.8g", result.value))
     UI.loading = false
     if options then
         local draft = {}
@@ -623,12 +628,13 @@ local function showCalculationPrompt(field)
     UI.calculationSession = session
     dialog.title:SetText("Calculate " .. field.label .. " weight")
     dialog.help:SetText((session.params.attackerLevelOffset and "Choose the attacker's level for armor mitigation." or
+        session.params.combatShare and "Set combat and casting time. Spirit health regeneration counts only out of combat." or
         session.params.castingShare and "Adjust regeneration ratios and stat bonuses." or "Choose the stat bonuses to include.") ..
         " Calculated weights stay unsaved until Apply weights.")
     local definitions = {
-        { key = "combatShare", text = "Time in combat", help = "Out of combat uses full Spirit regeneration; time in combat uses the casting assumptions below." },
-        { key = "castingShare", text = "Time while casting", help = "Share of time affected by the five-second mana regeneration rule. For MP5 this applies only to time in combat." },
-        { key = "whileCastingRegen", text = "Spirit regeneration while casting", help = "Percentage of normal Spirit regeneration retained while casting, including talents. The initial value is read from your current talents when possible." },
+        { key = "combatShare", text = "Time in combat", help = "Out of combat uses full Spirit mana regeneration and Spirit health regeneration. In combat uses the casting assumptions below for mana regeneration." },
+        { key = "castingShare", text = "Time while casting", help = "Share of in-combat time affected by the five-second mana regeneration rule." },
+        { key = "whileCastingRegen", text = "Spirit regeneration while casting", help = "Percentage of normal Spirit mana regeneration retained while casting, including talents. The initial value is read from your current talents when possible." },
     }
     local function refresh()
         if UI.calculationSession ~= session then return end
@@ -1481,8 +1487,9 @@ local function buildWeightFields()
         field.text:SetWordWrap(false)
         field.box = editBox(field.frame, 86)
         field.box:SetPoint("RIGHT", -4, 0)
-        field.box:SetJustifyH("RIGHT")
+        field.box:SetJustifyH("LEFT")
         field.box:SetMaxLetters(30)
+        field.box:HookScript("OnEditFocusLost", function(self) self:SetCursorPosition(0) end)
         field.box:SetScript("OnTextChanged", function(_, userInput)
             if UI.loading or not userInput then return end
             UI.dirtyWeights = true

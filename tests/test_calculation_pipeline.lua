@@ -7,10 +7,14 @@ local function close(actual, expected, message)
         (message or "value") .. ": " .. tostring(actual) .. " ~= " .. expected)
 end
 local intellectRank, clientBuild, conversionCalls, itemReads = 3, 70300, 0, 0
+local equippedLink = "item:1001"
 local items = {
     [1000]={name="Intellect helmet",intellect=10},
     [1001]={name="Equipped intellect helmet",intellect=5},
     [1002]={name="Flat mana helmet",mana=150},
+    [1003]={name="Spirit helmet",spirit=10},
+    [1004]={name="Equipped Spirit helmet",spirit=5},
+    [1005]={name="Flat health regeneration helmet",hp5=1},
 }
 local function item(link)
     return assert(items[tonumber(link:match("item:(%d+)"))], "Unexpected item " .. tostring(link))
@@ -21,7 +25,7 @@ UnitStat=function() return 100,100,0,0 end
 GetShapeshiftFormID=function() return 0 end
 GetBuildInfo=function() return "1.60.1",tostring(clientBuild),"Oct 17 2026",16001 end
 GetLocale=function() return "enUS" end
-GetInventoryItemLink=function(_, slot) if slot==1 then return "item:1001" end end
+GetInventoryItemLink=function(_, slot) if slot==1 then return equippedLink end end
 INTELLECT_BREAK, MANA_PER_INTELLECT = 20, 15
 C_ClassTalents={GetActiveConfigID=function() return 7 end}
 C_Traits={GetNodeInfo=function(_, node)
@@ -41,11 +45,16 @@ C_Item={GetItemInfo=GetItemInfo,IsItemDataCachedByID=function() return true end,
     GetItemStats=function(link)
         itemReads=itemReads+1
         local data=item(link)
-        return {ITEM_MOD_INTELLECT_SHORT=data.intellect,ITEM_MOD_MANA_SHORT=data.mana}
+        return {ITEM_MOD_INTELLECT_SHORT=data.intellect,ITEM_MOD_MANA_SHORT=data.mana,
+            ITEM_MOD_SPIRIT_SHORT=data.spirit,ITEM_MOD_HEALTH_REGEN_SHORT=data.hp5}
     end}
 C_TooltipInfo={GetHyperlink=function(link)
     local data=item(link)
-    local text=data.intellect and ("+" .. data.intellect .. " Intellect") or ("+" .. data.mana .. " Mana")
+    local text
+    if data.intellect then text="+" .. data.intellect .. " Intellect"
+    elseif data.mana then text="+" .. data.mana .. " Mana"
+    elseif data.spirit then text="+" .. data.spirit .. " Spirit"
+    elseif data.hp5 then text="Equip: Restores " .. data.hp5 .. " health per 5 sec." end
     return {lines={{leftText=data.name},{leftText=text}}}
 end}
 CreateFrame=nil
@@ -124,4 +133,29 @@ check(updatedRecord.stats.spellDamage==nil and updatedRecord.stats.healing==nil,
 local readsAtNewBuild=itemReads
 close(FW:GetScore("item:1000",profile),57.475)
 check(itemReads==readsAtNewBuild,"the new build's parsed stats remain cached")
+
+-- Spirit's combat-weighted mana and estimated out-of-combat health gains
+-- belong in its applied weight, not in parsed item stats or flat HP5 scores.
+assert(FW:UpdateProfile(profile.id,{weights={hp5=10,mp5=2},
+    calculationOptions={combatShare=0.6,castingShare=0.8,whileCastingRegen=0.3}}))
+local spiritWeight=calculate("spirit")
+close(spiritWeight,2.981,"Spirit combines the selected mana and health time budgets with Kings once")
+close(FW:GetScore("item:1003",profile),0,"Spirit previews leave applied item scores unchanged")
+assert(FW:UpdateProfile(profile.id,{weights={spirit=spiritWeight}}))
+local spiritScore,spiritRecord=FW:GetScore("item:1003",profile)
+close(spiritScore,29.81,"Spirit gear uses the combined applied weight")
+close(spiritRecord.stats.spirit,10,"raw item Spirit is not buffed during parsing")
+check(spiritRecord.stats.hp5==nil and spiritRecord.stats.mp5==nil,
+    "derived regeneration is not injected into parsed item stats")
+close(calculate("mp5"),2,"the MP5 inverse removes the same estimated health contribution")
+equippedLink="item:1004"
+local spiritComparison=assert(FW:CompareItem("item:1003",profile))
+close(spiritComparison.comparisons[1].baseline,14.905,"equipped Spirit gear uses the same combined weight")
+close(spiritComparison.comparisons[1].delta,14.905)
+check(spiritComparison.comparisons[1].status=="upgrade","the combined Spirit weight drives upgrade comparisons")
+close(FW:GetScore("item:1005",profile),10,"flat HP5 is not reduced by Spirit's combat ratio")
+local callsAfterSpirit,readsAfterSpirit=conversionCalls,itemReads
+for _=1,10 do close(FW:GetScore("item:1003",profile),29.81) end
+check(conversionCalls==callsAfterSpirit,"Spirit item scoring does not rerun stat conversions")
+check(itemReads==readsAfterSpirit,"Spirit item scoring reuses parsed stats")
 print("Calculation-to-item pipeline: " .. checks .. " checks passed.")

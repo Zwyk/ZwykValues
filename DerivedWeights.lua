@@ -162,6 +162,14 @@ local castingTalents = {
     DRUID = { node=104917, name="Reflection", rates={0.17,0.33,0.50} },
     HUNTER = { node=104963, name="Bestial Discipline", rates={0.25,0.50} },
 }
+-- Historical Classic coefficients retained by RatingBuster's Camelot rules.
+-- Follow its executable 50-Spirit breakpoint; omit every "No data" entry.
+-- These are health estimates, not verified Forever/native marginal rates.
+-- RatingBuster already multiplies these coefficients by 5: do not add the
+-- separate standing penalty used by the native total-regeneration display.
+local healthRegenBelow50={PALADIN=.194,MAGE=.0935,WARLOCK=.1055,DRUID=.112}
+local healthRegenAbove50={WARRIOR=.375,PALADIN=.094,HUNTER=.0935,PRIEST=.0317,
+    MAGE=.0315,WARLOCK=.036,DRUID=.0476}
 local primaryTalents = {
     PALADIN={strength={{node=105328,name="Divine Strength",rates={.02,.04,.06,.08,.10}}},
         intellect={{node=105332,name="Divine Intellect",rates={.02,.04,.06,.08,.10}}},
@@ -502,6 +510,7 @@ end
 
 local function sourceLabel(source)
     if not source then return end
+    if source:find("Classic/RatingBuster health estimate",1,true) then return "Classic/RatingBuster health estimate" end
     if source:find("Forever talent conversion",1,true) then return "Verified Forever talent conversion" end
     if source:find("Forever Armor",1,true) then return "Live Forever Armor API" end
     if source:find("Live client",1,true) then return "Live game API" end
@@ -576,10 +585,11 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         if not finite(value) then fail("The source weight for " .. stat .. " is not a finite number."); return 0 end
         return value
     end
-    local function add(stat, rate, source, suffix)
+    local function add(stat, rate, source, suffix, labelSuffix)
         local sourceWeight=weight(stat)
         local definition=FW.StatByKey and FW.StatByKey[stat]
         local label=definition and definition.label or stat
+        if labelSuffix then label=label .. labelSuffix end
         if not finite(rate) then
             if sourceWeight~=0 then fail("The " .. label .. " conversion for this class and level is unavailable.") end
             return
@@ -625,7 +635,10 @@ function FW:GetDerivedWeightOptions(key, weights, options)
             if gain then add(stat,gain.rate and gain.rate*scale,gain.source) end
         end
     end
-    local function addSpiritOther(scale)
+    local function addSpiritOther(scale,healthGain,healthSource)
+        if finite(healthGain) and healthGain~=0 then
+            add("hp5",healthGain*scale,healthSource,nil," (estimate)")
+        end
         for _, stat in ipairs({"spellDamage","healing"}) do
             local gain=gains[stat]
             if gain then add(stat,gain.rate and gain.rate*scale,gain.source) end
@@ -739,50 +752,67 @@ function FW:GetDerivedWeightOptions(key, weights, options)
         local combat=ratio(options.combatShare, defaults.combatShare)
         local casting=ratio(options.castingShare, defaults.castingShare)
         local regen=ratio(options.whileCastingRegen, defaults.whileCastingRegen)
-        result.params.castingShare,result.params.whileCastingRegen,result.params.combatShare=true,true,key=="mp5"
+        local usesMana=manaClasses[ctx.class]==true
+        result.params.castingShare,result.params.whileCastingRegen,result.params.combatShare=usesMana,usesMana,true
         result.options=result.options or {}
         result.options.combatShare,result.options.castingShare,result.options.whileCastingRegen=combat,casting,regen
-        if not manaClasses[ctx.class] then fail("This class does not use mana.")
+        if key=="mp5" and not usesMana then fail("This class does not use mana.")
         else
             local spirit=ctx.live and effectiveStat(5)
-            if not finite(spirit) then fail("Current Spirit is unavailable; the regeneration breakpoint cannot be checked.")
+            if not finite(spirit) or spirit<0 then fail("Current Spirit is unavailable; the regeneration breakpoint cannot be checked.")
             else
                 -- Integrate the next point across the 50-Spirit breakpoint.
                 -- A fractional stat near the breakpoint must not get the
                 -- entire point priced at the rate on either side.
                 local below=math.max(0, math.min(increment, 50-spirit))
-                local base=below*1.25+(increment-below)*0.625
+                local above=increment-below
+                local base=usesMana and (below*1.25+above*0.625) or 0
                 local castingMultiplier=(1-casting)+casting*regen
-                local multiplier=key=="spirit" and castingMultiplier or ((1-combat)+combat*castingMultiplier)
+                local multiplier=(1-combat)+combat*castingMultiplier
                 local effective=base*multiplier
-                if not seenSources["Forever: RatingBuster"] then
-                    result.provenance[#result.provenance+1]="Forever: RatingBuster"
-                    seenSources["Forever: RatingBuster"]=true
-                end
                 result.contextText=result.contextText .. " · " .. number(spirit) .. " Spirit"
-                line("Next 1 Spirit = " .. number(base) .. " MP5 before casting reductions (Forever / RatingBuster; breakpoint 50 Spirit).")
-                line(number(casting*100) .. "% while casting; " .. number(regen*100) .. "% Spirit regeneration retained while casting.")
-                line("Casting-regeneration default: " .. defaults.regenSource .. " Chosen value is shown above.")
-                assume(number(casting*100) .. "% under the casting rule; " .. number(regen*100) .. "% Spirit regeneration retained.")
-                modifier(number(casting*100) .. "% under the casting rule; " .. number(regen*100) .. "% Spirit regeneration retained.")
-                assume("Before casting reductions, next 1 Spirit gives " .. number(base) .. " MP5 (breakpoint: 50 Spirit).")
-                assume("Casting-regeneration default: " .. defaults.regenSource)
+                if usesMana then
+                    if not seenSources["Forever: RatingBuster"] then
+                        result.provenance[#result.provenance+1]="Forever: RatingBuster"
+                        seenSources["Forever: RatingBuster"]=true
+                    end
+                    line("Next 1 Spirit = " .. number(base) .. " MP5 before casting reductions (Forever / RatingBuster; breakpoint 50 Spirit).")
+                    line(number(casting*100) .. "% while casting; " .. number(regen*100) .. "% Spirit regeneration retained while casting.")
+                    line("Casting-regeneration default: " .. defaults.regenSource .. " Chosen value is shown above.")
+                    assume(number(casting*100) .. "% under the casting rule; " .. number(regen*100) .. "% Spirit regeneration retained.")
+                    modifier(number(casting*100) .. "% under the casting rule; " .. number(regen*100) .. "% Spirit regeneration retained.")
+                    assume("Before casting reductions, next 1 Spirit gives " .. number(base) .. " MP5 (breakpoint: 50 Spirit).")
+                    assume("Casting-regeneration default: " .. defaults.regenSource)
+                elseif weight("mp5")~=0 then fail("This class does not use mana.") end
+                line(number(combat*100) .. "% in combat; casting share applies during that combat time.")
+                assume(number(combat*100) .. "% in combat; casting share applies during combat.")
+                modifier(number(combat*100) .. "% in combat.")
+                local healthGain=0
+                local healthSource="Classic/RatingBuster health estimate; historical coefficients and 50-Spirit breakpoint."
+                if combat<1 then
+                    local low,high=healthRegenBelow50[ctx.class],healthRegenAbove50[ctx.class]
+                    if (below>0 and not low) or (above>0 and not high) then
+                        if weight("hp5")~=0 then
+                            fail("The out-of-combat Health per 5 seconds estimate is unavailable for this class and Spirit interval. Enter a Spirit weight manually or omit its HP5 contribution.")
+                        end
+                    else
+                        healthGain=((below>0 and below*low or 0)+(above>0 and above*high or 0))*5*(1-combat)
+                        assume("Out-of-combat health regeneration uses a historical Classic/RatingBuster estimate; Forever's native API returns only the total, not a marginal Spirit rate.")
+                    end
+                end
                 if key=="mp5" then
-                    line(number(combat*100) .. "% in combat; casting share applies during that combat time.")
-                    assume(number(combat*100) .. "% in combat; casting share applies during combat.")
-                    modifier(number(combat*100) .. "% in combat.")
                     if effective<=0 then fail("Spirit gives no mana at these ratios; an MP5 weight cannot be inferred. Reduce casting/combat time or increase retained regeneration.")
                     else
                         add("spirit", 1/effective, "MP5 = remaining Spirit weight / effective MP5 per Spirit.")
-                        addSpiritOther(-1/effective)
+                        addSpiritOther(-1/effective,healthGain,healthSource)
                         inverseBreakdown("spirit",effective)
                         result.formula="MP5 = (Spirit - its other modeled contributions) / " .. number(effective)
                     end
                 else
-                    add("mp5", effective, "Spirit = MP5 weight x effective MP5 per Spirit.")
-                    addSpiritOther(1)
+                    if usesMana then add("mp5", effective, "Spirit = MP5 weight x effective MP5 per Spirit.") end
+                    addSpiritOther(1,healthGain,healthSource)
                 end
-                assume("Health regeneration and unmodeled talent conversions are excluded.")
+                assume("In-combat health regeneration and unmodeled talent conversions are excluded.")
             end
         end
     elseif key=="attackPower" then

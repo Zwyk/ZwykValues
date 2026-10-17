@@ -17,7 +17,16 @@ local function widget(kind, name, parent)
     if name then _G[name] = result end
     return result
 end
-function CreateFrame(kind, name, parent) return widget(kind, name, parent or UIParent) end
+function CreateFrame(kind, name, parent, template)
+    local control = widget(kind, name, parent or UIParent)
+    if kind == "EditBox" and template == "InputBoxTemplate" then
+        control.scripts.OnEditFocusLost = function(self)
+            self.templateFocusLost = (self.templateFocusLost or 0) + 1
+            self.highlighted = false
+        end
+    end
+    return control
+end
 function methods:CreateFontString(name) return widget("FontString", name, self) end
 function methods:CreateTexture(name) return widget("Texture", name, self) end
 function methods:SetSize(width, height) self.width, self.height = width, height end
@@ -69,11 +78,18 @@ end
 function methods:GetWidth() local _, _, width = self:Rect() return width end
 function methods:GetHeight() local _, _, _, height = self:Rect() return height end
 function methods:SetScript(event, script) self.scripts[event] = script end
+function methods:HookScript(event, script)
+    local original = self.scripts[event]
+    self.scripts[event] = function(self, ...)
+        if original then original(self, ...) end
+        script(self, ...)
+    end
+end
 function methods:GetScript(event) return self.scripts[event] end
 function methods:Fire(event, ...) if self.scripts[event] then return self.scripts[event](self, ...) end end
 function methods:SetText(text)
     self.text = tostring(text)
-    if self.kind == "EditBox" then self:Fire("OnTextChanged", false) end
+    if self.kind == "EditBox" then self.cursor = #self.text self:Fire("OnTextChanged", false) end
 end
 function methods:GetText() return self.text end
 function methods:SetFont(_, size) self.fontSize = size end
@@ -86,7 +102,13 @@ function methods:SetChecked(value) self.checked = value end
 function methods:GetChecked() return self.checked end
 function methods:SetEnabled(value) self.enabled = value end
 function methods:SetFocus() self.focused = true end
-function methods:ClearFocus() self.focused = false end
+function methods:ClearFocus()
+    local hadFocus = self.focused
+    self.focused = false
+    if hadFocus then self:Fire("OnEditFocusLost") end
+end
+function methods:SetCursorPosition(value) self.cursor = math.max(0, math.min(#self.text, value)) end
+function methods:GetCursorPosition() return self.cursor or 0 end
 function methods:HighlightText() self.highlighted = true end
 function methods:IsShown() return self.shown end
 function methods:IsVisible() return self.shown and (not self.parent or self.parent:IsVisible()) end
@@ -111,6 +133,7 @@ for _, name in ipairs({ "SetBackdrop", "SetBackdropColor", "SetBackdropBorderCol
 end
 function methods:SetMaxLetters(value) self.maxLetters=value end
 function methods:SetFrameStrata(value) self.strata=value end
+function methods:SetJustifyH(value) self.justifyH = value end
 local catalogCalls = 0
 issecretvalue = function(value) return value == "SecretTexture" end
 GetLooseMacroIcons = function(values)
@@ -330,6 +353,34 @@ equal(profile.weights.hit, -3, "apply commits negative weights")
 equal(profile.weights.meleeCrit, 2, "Apply saves the melee critical-strike weight independently")
 equal(profile.weights.spellCrit, 7, "Apply saves the spell critical-strike weight independently")
 equal(profile.weights.crit, nil, "the editor saves canonical crit channels without the old combined key")
+do
+    local manaBox = weightBox("Mana")
+    equal(manaBox.justifyH, "LEFT", "weight fields keep their leading digits visible")
+    for _, entry in ipairs({ { "0.016233308", "0." }, { "-0.016233308", "-" }, { "1.623330812345678e-12", "1." } }) do
+        manaBox:SetFocus()
+        manaBox:SetText(entry[1])
+        manaBox:SetCursorPosition(4)
+        manaBox:Fire("OnTextChanged", true)
+        equal(manaBox:GetCursorPosition(), 4, "typing does not reset the editing caret")
+        FW:RefreshUI()
+        equal(manaBox:GetCursorPosition(), 4, "background refresh preserves the editing caret")
+        equal(manaBox:GetText(), entry[1], "editing preserves the complete numeric input")
+        manaBox:ClearFocus()
+        equal(manaBox:GetCursorPosition(), 0, "leaving a weight field reveals its prefix")
+        equal(manaBox:GetText(), entry[1], "focus loss does not round or reformat numeric input")
+        equal(manaBox:GetText():sub(1, #entry[2]), entry[2], "decimal, sign and scientific prefixes remain intact")
+        click("Apply weights")
+        equal(profile.weights.mana, tonumber(entry[1]), "Apply preserves the full entered numeric value")
+        local exported = assert(FW.JSON.Decode(assert(FW:ExportProfile(profile.id, true))))
+        equal(exported.mana, tonumber(entry[1]), "export preserves the full entered numeric value")
+        equal(manaBox:GetCursorPosition(), 0, "programmatic weight refresh starts at the leading digit")
+    end
+    check(manaBox.templateFocusLost and manaBox.templateFocusLost >= 3, "cursor cleanup preserves the native focus-loss handler")
+    manaBox:SetCursorPosition(#manaBox:GetText())
+    assert(FW:UpdateProfile(profile.id, { weights = { mana = 0.016233308 } }))
+    equal(manaBox:GetText(), "0.016233308", "profile loads retain the reported long decimal")
+    equal(manaBox:GetCursorPosition(), 0, "profile loads reveal the decimal prefix")
+end
 userText(strength, "invalid")
 click("Apply weights")
 equal(profile.weights.strength, 2.5, "invalid weight input leaves saved profile intact")
@@ -810,7 +861,9 @@ equal(strengthRanks:GetValue(), 0, "rank slider defaults to the current talent r
 equal(strengthRanks.minValue, 0, "talent slider includes rank zero")
 equal(strengthRanks.maxValue, 5, "Divine Strength slider includes every valid rank")
 check(not calculationDialog.sliders[1]:IsShown() and not calculationDialog.sliders[2]:IsShown(), "primary bonus prompt omits regeneration ratios")
+strength:SetCursorPosition(#strength:GetText())
 calculationDialog.use:Fire("OnClick")
+equal(strength:GetCursorPosition(), 0, "calculated weights reveal their leading digits")
 check(math.abs(tonumber(strength:GetText()) - 6.2) < 0.000001, "gear calculates from unsaved source weights")
 equal(calculationProfile.weights.strength, 0, "gear leaves saved weights unchanged")
 FW:RefreshUI()
@@ -893,7 +946,9 @@ local spirit, mp5 = weightBox("Spirit"), weightBox("Mana per 5 seconds")
 userText(mp5, "4")
 gear("spirit"):Fire("OnClick")
 check(calculationDialog:IsShown(), "Spirit gear opens a regeneration prompt")
-check(not calculationDialog.sliders[1]:IsShown(), "Spirit prompt omits combat share")
+check(calculationDialog.sliders[1]:IsShown(), "Spirit prompt includes combat share for out-of-combat regeneration")
+equal(calculationDialog.sliders[1]:GetValue(), 100, "Spirit prompt defaults to fully in-combat regeneration")
+check(calculationDialog.help:GetText():find("only out of combat", 1, true), "Spirit prompt explains when health regeneration contributes")
 equal(calculationDialog.sliders[2]:GetValue(), 80, "Spirit prompt starts with a visible casting assumption")
 equal(calculationDialog.sliders[3]:GetValue(), 30, "Spirit prompt defaults from current Reverence talent rank")
 calculationDialog.cancel:Fire("OnClick")
@@ -1043,6 +1098,67 @@ equal(conversionProfile.calculationOptions.talentRanks, nil, "Hunter automatic r
 UnitClass, C_Traits.GetNodeInfo, GetBuildInfo = conversionClass, conversionTraits, conversionBuild
 FW:DeleteProfile(conversionProfile.id)
 find(function(control) return control.kind == "Button" and control.profileID == calculationProfile.id end):Fire("OnClick")
+
+-- Spirit's combat ratio applies to both mana and out-of-combat health regeneration.
+do
+    local regenerationProfile = assert(FW:CreateProfile("Spirit health regeneration", { mp5 = 4, hp5 = 2 }))
+    assert(FW:UpdateProfile(regenerationProfile.id, { calculationOptions = { castingShare = 1, whileCastingRegen = 0.3 } }))
+    find(function(control) return control.kind == "Button" and control.profileID == regenerationProfile.id end):Fire("OnClick")
+    gear("spirit"):Fire("OnEnter")
+    check(sourceHighlighted("Mana per 5 seconds") and not sourceHighlighted("Health per 5 seconds"), "fully in-combat Spirit highlights mana regeneration without out-of-combat health")
+    gear("spirit"):Fire("OnClick")
+    for _, slider in ipairs(calculationDialog.sliders) do check(slider:IsShown(), "Spirit shows all three regeneration ratios") end
+    local combatPreview = calculationDialog.details:GetText()
+    calculationDialog.sliders[1]:SetValue(50)
+    check(calculationDialog.use.enabled, "a mixed combat ratio can calculate combined Spirit regeneration")
+    check(calculationDialog.details:GetText() ~= combatPreview and calculationDialog.details:GetText():find("Health per 5 seconds", 1, true), "the live Spirit preview adds the out-of-combat health contribution")
+    local options = { combatShare = 0.5, castingShare = 1, whileCastingRegen = 0.3 }
+    local expected = FW:GetDerivedWeightOptions("spirit", regenerationProfile.weights, options)
+    local manaShare, healthShare
+    for _, contribution in ipairs(expected.contributions or {}) do
+        if contribution.key == "mp5" then manaShare = contribution end
+        if contribution.key == "hp5" then healthShare = contribution end
+    end
+    check(manaShare and manaShare.rate > 0 and healthShare and healthShare.rate > 0, "combined Spirit calculation exposes both regeneration inputs")
+    check(math.abs(expected.value - (manaShare.value + healthShare.value)) < 0.000001, "combined preview adds the mana and health weight contributions")
+    calculationDialog.cancel:Fire("OnClick")
+    equal(regenerationProfile.calculationOptions.combatShare, nil, "cancelling the combat ratio leaves saved preferences automatic")
+    equal(tonumber(weightBox("Spirit"):GetText()), 0, "cancelling the combined preview leaves the Spirit draft unchanged")
+    gear("spirit"):Fire("OnClick")
+    equal(calculationDialog.sliders[1]:GetValue(), 100, "a cancelled combat ratio is not retained in the draft")
+    calculationDialog.sliders[1]:SetValue(50)
+    calculationDialog.use:Fire("OnClick")
+    check(math.abs(tonumber(weightBox("Spirit"):GetText()) - expected.value) < 0.000001, "Use fills the combined Spirit draft")
+    equal(regenerationProfile.calculationOptions.combatShare, nil, "accepting combined regeneration keeps the ratio unsaved until Apply")
+    gear("spirit"):Fire("OnEnter")
+    check(sourceHighlighted("Mana per 5 seconds") and sourceHighlighted("Health per 5 seconds"), "accepted out-of-combat time highlights both Spirit regeneration inputs")
+    userText(weightBox("Health per 5 seconds"), "0")
+    gear("spirit"):Fire("OnEnter")
+    check(sourceHighlighted("Health per 5 seconds"), "a valid health-regeneration input remains highlighted when its weight is zero")
+    userText(weightBox("Health per 5 seconds"), "2")
+    gear("mp5"):Fire("OnEnter")
+    local healthDeduction
+    for _, columns in ipairs(calculatorDoubleLines) do
+        if columns.left == "Less Health per 5 seconds (estimate)" then healthDeduction = columns.right end
+    end
+    check(healthDeduction and not healthDeduction:match("^-"), "inverse MP5 presents health regeneration as a positive-cost deduction")
+    check(sourceHighlighted("Spirit") and sourceHighlighted("Health per 5 seconds"), "inverse MP5 highlights Spirit and its health-regeneration correction")
+    gear("mp5"):Fire("OnClick")
+    check(calculationDialog.use.enabled and calculationDialog.details:GetText():find("Less Health per 5 seconds", 1, true), "MP5 preview subtracts the health share before converting the remaining Spirit weight")
+    calculationDialog.use:Fire("OnClick")
+    check(math.abs(tonumber(weightBox("Mana per 5 seconds"):GetText()) - 4) < 0.000001, "inverse MP5 recovers the mana weight from combined Spirit regeneration")
+    click("Apply weights")
+    equal(regenerationProfile.calculationOptions.combatShare, 0.5, "Apply saves the shared combat ratio")
+    check(math.abs(regenerationProfile.weights.spirit - expected.value) < 0.000001, "Apply saves the combined Spirit weight")
+    gear("spirit"):Fire("OnClick")
+    calculationDialog.sliders[1]:SetValue(100)
+    calculationDialog.use:Fire("OnClick")
+    gear("spirit"):Fire("OnEnter")
+    check(not sourceHighlighted("Health per 5 seconds"), "returning to fully in-combat time removes the health-regeneration highlight")
+    gear("spirit"):Fire("OnLeave")
+    FW:DeleteProfile(regenerationProfile.id)
+    find(function(control) return control.kind == "Button" and control.profileID == calculationProfile.id end):Fire("OnClick")
+end
 
 -- Armor compares mitigation at an explicitly selected attacker level.
 local effectivePlayerLevel, armorLevels = 31, {}
@@ -1425,6 +1541,7 @@ gear("strength"):Fire("OnEnter")
 local remaining = FW:GetProfiles()
 for _, existing in ipairs(remaining) do FW:DeleteProfile(existing.id) end
 check(not sourceHighlighted("Attack power"), "removing every profile clears disabled source fields")
+equal(weightBox("Mana"):GetCursorPosition(), 0, "clearing the weight editor reveals the zero value")
 check(not byText("Item filters", "Button").enabled, "filter button is disabled without a profile")
 check(not swatch.enabled, "color picker square is disabled without a profile")
 check(not iconControl.enabled, "icon picker is disabled without a profile")

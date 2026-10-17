@@ -22,6 +22,7 @@ local function reset(class, level)
     GetCritChanceFromStat,GetSpellCritChanceFromStat=nil,nil
     GetCritChanceFromAgility,GetSpellCritChanceFromIntellect=nil,nil
     GetAttackPowerForStat,GetRangedAttackPowerForStat,UnitHPPerStamina=nil,nil,nil
+    GetHealthRegenFromSpirit=nil
     GetActiveSpecGroup,C_SpecializationInfo,IsPlayerSpell=nil,nil,nil
     GetBuildInfo=nil
     C_ClassTalents={GetActiveConfigID=function() return 1 end}
@@ -137,7 +138,7 @@ local unavailable=FW:GetDerivedWeightOptions("mp5",{spirit=1},{combatShare=1,cas
 equal(unavailable.available,false,"Never divide by zero at no mana regeneration")
 check(unavailable.params.combatShare and unavailable.params.castingShare and unavailable.params.whileCastingRegen)
 has(unavailable.lines,"cannot be inferred")
-check(calculate("spirit",{mp5=1}).params.combatShare==false)
+check(calculate("spirit",{mp5=1}).params.combatShare==true)
 has(calculate("spirit",{mp5=1},{whileCastingRegen=0.7}).lines,"Chosen value is shown above")
 stats[5]=nil
 equal(FW:GetDerivedWeightOptions("spirit",{mp5=1}).available,false)
@@ -667,6 +668,92 @@ equal(contribution(nativeMana,"spellCrit").operation,"subtract")
 close(contribution(nativeMana,"spellCrit").displayValue,.02*1.21*7,"Inverse tooltip highlights the positive Spell Crit share")
 local nativeNoSpell=calculate("mana",{intellect=15*.3*1.21,meleeCrit=1e9},splitOptions)
 close(nativeNoSpell.value,.3,"Melee Crit alone creates no Mana deduction")
+
+-- Out-of-combat Spirit health regeneration is explicitly a historical
+-- estimate. Never divide the native total by Spirit or invent stat arguments.
+reset("PALADIN",60)
+local nativeHealthCalls=0
+GetHealthRegenFromSpirit=function() nativeHealthCalls=nativeHealthCalls+1;return 999,999 end
+local outside={combatShare=0,castingShare=1,whileCastingRegen=0}
+local mixed={combatShare=.5,castingShare=1,whileCastingRegen=0}
+local healthSpirit=calculate("spirit",{mp5=2,hp5=3},outside)
+close(healthSpirit.value,.625*2+.094*5*3,"Out-of-combat share includes full Mana and estimated HP5")
+close(contribution(healthSpirit,"hp5").rate,.094*5,"RatingBuster HP5 coefficient is used as-is, without an extra standing penalty")
+check(contribution(healthSpirit,"hp5").label:find("(estimate)",1,true))
+has(healthSpirit.provenance,"Classic/RatingBuster health estimate")
+check(healthSpirit.params.combatShare and healthSpirit.params.castingShare and healthSpirit.params.whileCastingRegen)
+equal(nativeHealthCalls,0,"The zero-argument total API is not a marginal conversion API")
+local mixedSpirit=calculate("spirit",{mp5=2,hp5=3},mixed)
+close(mixedSpirit.value,.625*.5*2+.094*5*.5*3,"Casting reductions affect only the in-combat Mana share")
+close(contribution(mixedSpirit,"hp5").rate,.235)
+local mixedMP5=calculate("mp5",{spirit=mixedSpirit.value,hp5=3},mixed)
+close(mixedMP5.value,2,"MP5 inverse subtracts the out-of-combat HP5 share with the same time budget")
+local healthDeduction=contribution(mixedMP5,"hp5")
+equal(healthDeduction.operation,"subtract")
+check(healthDeduction.rate<0 and healthDeduction.value<0,"Inverse HP5 coefficients stay signed internally")
+close(healthDeduction.displayRate,.235)
+close(healthDeduction.displayValue,.235*3,"UI shows a positive HP5 cost in Spirit units")
+check(healthDeduction.label:find("(estimate)",1,true))
+local defaultHealth=calculate("spirit",{mp5=2,hp5=3})
+close(defaultHealth.value,.625*.2*2,"Default100% combat preserves the previous Spirit calculation")
+equal(contribution(defaultHealth,"hp5"),nil,"No out-of-combat HP5 row or highlight at100% combat")
+local zeroHealthWeight=calculate("spirit",{mp5=2,hp5=0},outside)
+close(zeroHealthWeight.value,.625*2)
+equal(contribution(zeroHealthWeight,"hp5").weight,0,"Known HP5 conversion stays visible when its profile weight is zero")
+local healthMismatch=FW:GetDerivedWeightOptions("mp5",{spirit=.1,hp5=3},outside)
+equal(healthMismatch.available,false)
+check(healthMismatch.reason:find("exceed the Spirit weight",1,true))
+stats[5]=49.5
+local breakpointHealth={combatShare=0,castingShare=1,whileCastingRegen=0,kings=true}
+local crossingHealth=calculate("spirit",{mp5=2,hp5=3},breakpointHealth)
+close(contribution(crossingHealth,"hp5").rate,(.5*.194+.6*.094)*5,"Kings integrates both sides of the50-Spirit health breakpoint once")
+close(crossingHealth.value,(.5*1.25+.6*.625)*2+(.5*.194+.6*.094)*5*3)
+close(calculate("mp5",{spirit=crossingHealth.value,hp5=3},breakpointHealth).value,2)
+stats[5]=50
+close(calculate("spirit",{hp5=1},outside).value,.094*5,"The next point at50 uses the upper-side health rate")
+stats[5]=49
+close(calculate("spirit",{hp5=1},outside).value,.194*5,"The point ending at50 uses the lower-side health rate")
+reset("MAGE",60)
+close(calculate("spirit",{hp5=1},outside).value,.0315*5,"HP5 estimate is class-specific")
+stats[5]=49
+close(calculate("spirit",{hp5=1},outside).value,.0935*5)
+playerLevel=1
+close(calculate("spirit",{hp5=1},outside).value,.0935*5,"Historical executable rule follows Spirit, not the ambiguous level comments")
+reset("DRUID",60)
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=node==104911 and 3 or 0} end
+stats[5]=49.5
+local livingHealth=calculate("spirit",{mp5=2,hp5=3},breakpointHealth)
+local livingIncrement=1.1*1.15
+local livingHP5=(.5*.112+(livingIncrement-.5)*.0476)*5
+local livingMana=.5*1.25+(livingIncrement-.5)*.625
+close(contribution(livingHealth,"hp5").rate,livingHP5,"Living Spirit and Kings multiply the raw interval once")
+close(livingHealth.value,livingMana*2+livingHP5*3)
+close(calculate("mp5",{spirit=livingHealth.value,hp5=3},breakpointHealth).value,2)
+reset("PRIEST",60)
+stats[5]=49
+local unsupportedHealth=FW:GetDerivedWeightOptions("spirit",{mp5=2,hp5=1},outside)
+equal(unsupportedHealth.available,false,"Rows marked No data never become automatic coefficients")
+check(unsupportedHealth.reason:find("out-of-combat Health per 5 seconds estimate is unavailable",1,true))
+close(calculate("spirit",{mp5=2,hp5=0},outside).value,1.25*2,"Missing health coefficient does not block a zero HP5 weight")
+check(calculate("spirit",{mp5=2,hp5=1},{combatShare=1}).available,"Missing health coefficient is irrelevant with no out-of-combat time")
+equal(FW:GetDerivedWeightOptions("mp5",{spirit=3,hp5=1},outside).available,false,"Inverse also requires a nonzero weighted HP5 share to be known")
+stats[5]=100
+C_Traits.GetNodeInfo=function(_,node) return {activeRank=node==105853 and 5 or 0} end
+local guidanceHealth=calculate("spirit",{mp5=2,hp5=3,spellDamage=4,healing=5},mixed)
+close(guidanceHealth.value,.625*.5*2+.0317*5*.5*3+.08*4+.25*5)
+close(calculate("mp5",{spirit=guidanceHealth.value,hp5=3,spellDamage=4,healing=5},mixed).value,2,"Inverse removes HP5 and both Guidance outputs before inferring MP5")
+reset("WARRIOR",60)
+local warriorHealth=calculate("spirit",{hp5=2},outside)
+close(warriorHealth.value,.375*5*2,"Known HP5-only Spirit calculation works for a class without Mana")
+equal(contribution(warriorHealth,"mp5"),nil)
+check(warriorHealth.params.combatShare and not warriorHealth.params.castingShare and not warriorHealth.params.whileCastingRegen)
+close(calculate("spirit",{hp5=2},{combatShare=.5,kings=true}).value,.375*5*1.1*.5*2)
+equal(FW:GetDerivedWeightOptions("mp5",{spirit=2},outside).available,false,"HP5 does not invent a Mana equivalence for Warrior")
+stats[5]=49
+equal(FW:GetDerivedWeightOptions("spirit",{hp5=1},outside).available,false,"Unmeasured Warrior low-Spirit row stays unavailable")
+reset("ROGUE",60)
+equal(FW:GetDerivedWeightOptions("spirit",{hp5=1},outside).available,false,"Unmeasured Rogue health rows stay unavailable")
+close(calculate("spirit",{hp5=1},{combatShare=1}).value,0,"Unsupported health estimate is unnecessary with no out-of-combat time")
 
 reset()
 local draft={attackPower=0.2,meleeCrit=10,spellCrit=3,mp5=2}
