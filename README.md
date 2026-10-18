@@ -1,8 +1,8 @@
-# ZwykValues 0.1.30
+# ZwykValues 0.1.31
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
-Version 0.1.30 restores **Percent / Rating** display with converted weights and imports WoWSims Forever's **60U EP links** and **Pawn EP strings**. Switching display units preserves item scores and unsaved edits. Existing profile weights retain their values.
+Version 0.1.31 adds a class/spec icon, one combined Crit input with an advanced Melee/Spell distribution control, and a **Global settings** window. Existing channel weights remain intact. Percent/Rating conversion and WoWSims/Pawn imports continue to work with the combined input.
 
 ## Installation
 
@@ -27,6 +27,21 @@ Create, copy, rename, or delete profiles in the left column. Set an individual t
 
 An optional **Icon** beside the color controls opens a picker of the game's available macro icons. Choose an icon to show it before the profile name in the list and item tooltips, or choose **None** to remove it. Icon choices save immediately and remain part of copied profiles and full profile exports. Existing profiles start without an icon; icon changes keep your unsaved edits and cached item scores.
 
+The separate **Class/spec** icon selects Any, Physical, Caster, Healer, a class or a specialization. New profiles use your current class and select a spec only when the active talent allocation has at least 10 spent points, a leading branch with at least 60% of the total and a lead of at least five points. Mixed, unavailable or unreadable talent data falls back to the class. Shockadin is a manual option. Existing profiles start as Any and keep their previous crit allocation. Copies and full exports preserve the chosen classification and allocation; neither is linked to later talent changes. Attribute calculators still use the current character's actual class and level.
+
+**Critical strike** is now one combined input. The distribution icon beside it opens a slider and synchronized Melee/Spell percentage inputs; hover it for a short allocation preview. The two percentages add up to 100%. Selecting a class/spec places its default split into the current draft. Adjust or reset it in the advanced window, then click **Apply weights** to save. Changing the split preserves the total value of generic crit while changing the value of melee-only and spell-only effects. Agility calculations use the melee portion, and Intellect/Mana calculations use the spell portion.
+
+| Classification | Melee / Spell |
+| --- | --- |
+| Any; Paladin; Protection Paladin; Shaman; Enhancement; Druid | 50 / 50 |
+| Physical; Warrior and specs; Hunter and specs; Rogue and specs; Retribution; Holy Paladin; Feral | 100 / 0 |
+| Caster; Healer; Mage and specs; Warlock and specs; Priest and specs; Elemental; Restoration Shaman; Balance; Restoration Druid | 0 / 100 |
+| Shockadin | 70 / 30 |
+
+The saved scoring channels remain `meleeCrit` and `spellCrit`, with `classSpec` and `critMeleeShare` as full-profile metadata. A profile with old opposite-sign channel weights keeps those exact weights until you change its total or allocation, since a 0–100% slider cannot represent that pair. Bare weights exports preserve both channels but omit classification metadata.
+
+**Global settings** groups Item windows, Loot rolls, Chat item links, tooltip comparisons and unrecognized-stat markers. Independent **Profile icon** and **Class icon** switches control the icons in item tooltips, including comparison tooltips. Both icon switches start enabled. These settings apply to every profile immediately and do not change weight values or cached scores. Per-profile tooltip visibility, upgrade activation and item filters remain part of each profile.
+
 The picker groups icons into **Your class**, **Spells**, **Items** and **Other**. **All** puts your class first, using the spellbook and artwork explicitly labelled for that class. Search matches partial words in available spell/item names, ranks, descriptions, class/category names, texture filenames and IDs. Case and accents are ignored; multiple words narrow the results. Names come from the spellbook and available item data; unrelated icons remain searchable by their texture filenames and IDs. Hover an icon for its name and known details.
 
 Edit weights in the grouped stat editor and apply them. Positive, zero, negative, and fractional weights are supported. The initial **My profile** is empty: it contains no invented class or specialization weights.
@@ -47,7 +62,7 @@ Copies and full profile exports preserve these choices. Bare weights JSON and ol
 
 ## Stat units and JSON
 
-**Import** accepts a WoWSims Forever **60U EP export link**, a **Pawn scale string**, or a bare JSON object of stat weights, including legacy Sixty Upgrades keys. Full ZwykValues/ZwykPoints/ForeverWeights profile JSON also remains accepted. Leave the optional name blank to use the exported profile name. Missing recognized keys become zero. Unsupported nonzero export fields and invalid numeric values are rejected with a message so they cannot silently change a profile. The two crit weights use `meleeCrit` and `spellCrit`.
+**Import** accepts a WoWSims Forever **60U EP export link**, a **Pawn scale string**, or a bare JSON object of stat weights, including legacy Sixty Upgrades keys. Full ZwykValues/ZwykPoints/ForeverWeights profile JSON also remains accepted. Leave the optional name blank to use the exported profile name. Missing recognized keys become zero. Unsupported nonzero export fields and invalid numeric values are rejected with a message so they cannot silently change a profile. The two saved crit weights use `meleeCrit` and `spellCrit`, edited together through the combined Crit input and its allocation control.
 
 60U Forever links already contain percentage weights. Pawn rating weights are converted to percentage weights on import and initially display as Rating. With **Shared Pawn crit (WoWSims Forever)** checked, `CritRating` is a combined weight, split evenly between Melee and Spell Crit. Disable it for Classic Pawn scales where `CritRating` is physical crit and `SpellCritRating` is separate. Enable **Pawn values already use percentages (Classic)** for Classic scales whose secondary weights are already per 1%, despite their Rating-named keys; leave it disabled for WoWSims Forever. WoWSims exports do not preserve the actual melee/spell split; review that balance after import. Imported weights already include their modeled primary-stat value and are never automatically recalculated through the gear buttons.
 
@@ -55,7 +70,7 @@ Both WoWSims exporters round to three decimals, so equivalent exports can differ
 
 Old profiles and imports with only the legacy `crit` key split it evenly: `crit: 10` becomes `meleeCrit: 5` and `spellCrit: 5`. This preserves the total value of generic crit; the old single value cannot identify your intended melee/spell balance, so review the two weights for your build. Migration runs once, retains no hidden third Crit weight, and clears obsolete score/item caches. Explicit new values remain unchanged on reload. Inputs mixing legacy `crit` with either new crit key are rejected; use the explicit pair when choosing a new balance. Full and bare exports contain the two new keys.
 
-**Export weights** produces the bare stat object in percentage/skill units, regardless of the selected display. **Export profile** also preserves the profile name, color, icon, display preference, item filters, upgrade activation, comparison target, calculator ratios and manual talent ranks. These metadata are lost when exporting only bare weights.
+**Export weights** produces the bare stat object in percentage/skill units, regardless of the selected display. **Export profile** also preserves the profile name, color, decorative icon, class/spec, Crit allocation, display preference, item filters, upgrade activation, comparison target, calculator ratios and manual talent ranks. These metadata are lost when exporting only bare weights.
 
 Choose **Percent** or **Rating** independently for each profile. This changes the displayed secondary weights using WoWSims Forever's export conversions; it leaves the canonical weights, calculations and scores unchanged. The unit table below describes the canonical JSON/scoring units:
 
@@ -231,6 +246,9 @@ Run the included tests from the addon directory with a Lua interpreter, for exam
 ```sh
 lua tests/test_core.lua
 lua tests/test_display_units.lua
+lua tests/test_profile_classes.lua
+lua tests/test_crit_distribution.lua
+lua tests/test_global_settings.lua
 lua tests/test_external_imports.lua
 lua tests/test_derived_weights.lua
 lua tests/test_calculation_pipeline.lua
@@ -261,6 +279,7 @@ lua tests/test_hover_performance.lua
 
 - `JSON.lua`: strict JSON reader/writer; no executable imports.
 - `Stats.lua`: stat schema and native API mappings.
+- `ProfileClasses.lua`: class/spec icons, default Crit allocations and conservative talent-branch detection.
 - `Imports.lua`: non-executable 60U Forever EP link and Pawn scale parsing.
 - `Core.lua`: profile management, import/export, scoring, and score-cache invalidation.
 - `Items.lua`: item variants, client data loading, normalization, static tooltip parsing and timed on-use stat buffs.
@@ -272,6 +291,7 @@ lua tests/test_hover_performance.lua
 - `Tooltips.lua`: native tooltip hooks and refresh handling.
 - `Textures/ArrowUp.tga` and `Textures/ArrowDown.tga`: tooltip comparison indicators; `ArrowUpWhite.tga` supports profile-colored upgrade markers.
 - `UI.lua`: profile and weight editor.
+- `GlobalSettings.lua`: shared upgrade-marker and tooltip display options.
 - `Bootstrap.lua`: saved variables lifecycle, events, diagnostics, and slash commands.
 
 ## License

@@ -101,6 +101,7 @@ function methods:SetTexture(texture) self.texture = texture end
 function methods:SetChecked(value) self.checked = value end
 function methods:GetChecked() return self.checked end
 function methods:SetEnabled(value) self.enabled = value end
+function methods:IsEnabled() return self.enabled end
 function methods:SetFocus() self.focused = true end
 function methods:ClearFocus()
     local hadFocus = self.focused
@@ -175,7 +176,7 @@ local popup
 StaticPopup_Show = function(kind, _, _, data) popup = { kind = kind, data = data } end
 
 local FW = {}
-for _, file in ipairs({ "JSON.lua", "Stats.lua", "Core.lua", "IconCatalog.lua", "DerivedWeights.lua", "UI.lua" }) do assert(loadfile(addonPath .. "/" .. file))("ZwykValues", FW) end
+for _, file in ipairs({ "JSON.lua", "Stats.lua", "ProfileClasses.lua", "Core.lua", "IconCatalog.lua", "DerivedWeights.lua", "GlobalSettings.lua", "UI.lua" }) do assert(loadfile(addonPath .. "/" .. file))("ZwykValues", FW) end
 local tooltipRefreshes, upgradeRefreshes = 0, 0
 function FW:RefreshTooltips() tooltipRefreshes = tooltipRefreshes + 1 end
 function FW:RefreshUpgradeIndicators() upgradeRefreshes = upgradeRefreshes + 1 end
@@ -206,7 +207,7 @@ equal(#widgets, created, "ShowUI reuses existing editor widgets")
 
 local function find(predicate)
     for _, control in ipairs(widgets) do if predicate(control) then return control end end
-    error("Missing UI control")
+    error(debug.traceback("Missing UI control"))
 end
 local function byText(text, kind)
     return find(function(control) return control.text == text and (not kind or control.kind == kind) end)
@@ -275,13 +276,18 @@ local strength, hit = weightBox("Strength"), weightBox("Hit (%)")
 local profile = FW:GetProfiles()[1]
 userText(strength, "2.5")
 userText(hit, "-3")
-local critical = byText("Spell critical strike (%)", "FontString")
-do
-    local meleeCritBox, spellCritBox = weightBox("Melee critical strike (%)"), weightBox("Spell critical strike (%)")
-    userText(meleeCritBox, "2")
-    userText(spellCritBox, "7")
-    check(meleeCritBox ~= spellCritBox, "melee and spell critical strike have separate inputs")
+local critical = byText("Critical strike (%)", "FontString")
+function setCritWeights(melee, spell)
+    local total = melee + spell
+    local unit = critical:GetText():find("rating", 1, true) and "rating" or "percent"
+    userText(weightBox(critical:GetText()), tostring(FW:WeightToDisplay("crit", total, unit)))
+    find(function(control) return control.isCritDistribution end):Fire("OnClick")
+    ZwykValuesCritDistribution.slider:SetValue(total == 0 and 50 or melee / total * 100)
+    ZwykValuesCritDistribution.apply:Fire("OnClick")
 end
+setCritWeights(2, 7)
+check(not pcall(weightBox, "Melee critical strike (%)"), "merged Crit hides separate melee input")
+check(not pcall(weightBox, "Spell critical strike (%)"), "merged Crit hides separate spell input")
 local defense = byText("Defense (skill)", "FontString")
 for _, text in ipairs({ "Haste (%)", "Expertise (%)", "Dodge (%)", "Parry (%)", "Block chance (%)" }) do
     check(byText(text, "FontString"), "percent weight label specifies its unit: " .. text)
@@ -296,8 +302,7 @@ do
     equal(profile.secondaryUnit, "percent", "display preference preserves canonical percentage scoring")
     equal(profile.revision, revision, "display changes do not invalidate item score revisions")
     equal(tonumber(hit:GetText()), -0.3, "rating display converts the unsaved hit weight")
-    check(math.abs(tonumber(weightBox("Melee crit (rating)"):GetText()) - 2 / 14) < 0.000000000001, "crit display uses 14 rating per percentage point")
-    equal(tonumber(weightBox("Spell crit (rating)"):GetText()), 0.5, "spell critical strike has its own converted input")
+    check(math.abs(tonumber(weightBox("Critical strike (rating)"):GetText()) - 9 / 14) < 0.000000000001, "combined crit display uses 14 rating per percentage point")
     equal(defense:GetText(), "Defense (skill)", "defense remains in skill points in rating mode")
     equal(strength:GetText(), "2.5", "unit switch keeps primary draft weights")
     check(strength.focused, "unit switch preserves field focus")
@@ -306,10 +311,10 @@ do
     userText(hit, "-0.7")
     click("Percent")
     equal(tonumber(hit:GetText()), -7, "rating edits convert back to canonical percentage-point weights")
-    equal(tonumber(weightBox("Melee critical strike (%)"):GetText()), 2, "switching units preserves untouched canonical weights exactly")
+    equal(tonumber(weightBox("Critical strike (%)"):GetText()), 9, "switching units preserves untouched canonical weights exactly")
     userText(hit, "-3")
     for _ = 1, 10 do click("Rating") click("Percent") end
-    equal(tonumber(weightBox("Melee critical strike (%)"):GetText()), 2, "repeated display switches introduce no conversion drift")
+    equal(tonumber(weightBox("Critical strike (%)"):GetText()), 9, "repeated display switches introduce no conversion drift")
     userText(hit, "invalid")
     click("Rating")
     equal(profile.secondaryDisplayUnit, "percent", "invalid drafts block a unit switch without saving a partial conversion")
@@ -319,8 +324,7 @@ do
 end
 profile.secondaryUnit = "rating" -- Simulate a malformed legacy in-memory profile.
 FW:RefreshUI()
-equal(critical:GetText(), "Spell critical strike (%)", "crit label always uses percentage points")
-equal(byText("Melee critical strike (%)", "FontString"):GetText(), "Melee critical strike (%)", "melee critical strike label uses percentage points")
+equal(critical:GetText(), "Critical strike (%)", "combined crit label always uses percentage points")
 equal(defense:GetText(), "Defense (skill)", "defense label always uses defense skill")
 equal(hit.parent.children[1]:GetText(), "Hit (%)", "hit label always uses percentage points")
 profile.secondaryUnit = "percent"
@@ -388,11 +392,113 @@ do
     click("Apply weights")
     equal(profile.weights.meleeCrit, precise, "applying a converted display preserves the complete canonical floating-point value")
     equal(profile.revision, revision, "unchanged converted weights retain score caches after Apply")
-    userText(weightBox("Melee crit (rating)"), "0.125")
+    userText(weightBox("Critical strike (rating)"), "0.125")
     click("Apply weights")
-    equal(profile.weights.meleeCrit, 1.75, "Apply converts an edited rating field into canonical percentage-point weights")
+    equal(profile.weights.meleeCrit + profile.weights.spellCrit, 1.75, "Apply converts the combined rating field to percentage-point weights")
     click("Percent")
-    assert(FW:UpdateProfile(profile.id, { weights = { meleeCrit = 2 } }))
+    assert(FW:UpdateProfile(profile.id, { weights = { meleeCrit = 2, spellCrit = 7 } }))
+end
+do
+    local classButton = find(function(control) return control.isProfileClass end)
+    local splitButton = find(function(control) return control.isCritDistribution end)
+    local savedClass, savedShare = profile.classSpec, profile.critMeleeShare
+    local revision, scroll, name = profile.revision, ZwykValuesStatsScroll:GetVerticalScroll(), profile.name
+    local oldTooltip, previewLines = GameTooltip, {}
+    GameTooltip = { SetOwner = function() end, SetText = function(_, text) previewLines = { text } end,
+        AddLine = function(_, text) previewLines[#previewLines + 1] = text end, Show = function() end, Hide = function() end }
+    weightBox("Critical strike (%)"):Fire("OnEnter")
+    check(table.concat(previewLines, "\n"):find("Saved weights: meleeCrit and spellCrit", 1, true), "combined Crit tooltip identifies both saved channels")
+    check(table.concat(previewLines, "\n"):find("combined value", 1, true), "combined Crit tooltip explains generic item scoring")
+    splitButton:Fire("OnEnter")
+    check(table.concat(previewLines, "\n"):find("Melee", 1, true) and table.concat(previewLines, "\n"):find("Spell", 1, true), "distribution tooltip previews both channels")
+    splitButton:Fire("OnLeave")
+    userText(strength, "3.25")
+    strength:SetFocus()
+    ZwykValuesStatsScroll:SetVerticalScroll(85)
+    classButton:Fire("OnClick")
+    local picker = ZwykValuesProfileClassPicker
+    check(picker:IsShown(), "profile class icon opens the class/spec selector")
+    equal(#picker.rows, #FW.ProfileClassChoices, "class picker exposes all roles, classes and specializations")
+    check(picker.scroll:GetVerticalScrollRange() > 0, "class/spec choices remain available through scrolling")
+    find(function(control) return control.profileClassKey == "PALADIN_SHOCKADIN" end):Fire("OnClick")
+    equal(profile.classSpec, "PALADIN_SHOCKADIN", "class/spec choice saves profile metadata immediately")
+    equal(profile.weights.meleeCrit, 2, "class selection keeps saved melee Crit unchanged until Apply")
+    equal(profile.weights.spellCrit, 7, "class selection keeps saved spell Crit unchanged until Apply")
+    equal(profile.revision, revision, "class metadata alone keeps score caches valid")
+    equal(strength:GetText(), "3.25", "class selection preserves other unsaved weights")
+    check(strength.focused, "class selection preserves the focused weight field")
+    equal(ZwykValuesStatsScroll:GetVerticalScroll(), 85, "class selection preserves the weights scroll position")
+    equal(classButton.children[1].texture, FW:GetProfileClass("PALADIN_SHOCKADIN").icon, "editor class icon follows the chosen specialization")
+    local row = find(function(control) return control.profileID == profile.id end)
+    equal(row.classIcon.texture, classButton.children[1].texture, "profile list displays the same class/spec icon")
+    splitButton:Fire("OnClick")
+    local dialog = ZwykValuesCritDistribution
+    equal(dialog.slider:GetValue(), 70, "Shockadin selection suggests a 70/30 Crit split")
+    equal(tonumber(dialog.meleeInput:GetText()), 70, "Melee input matches the slider")
+    equal(tonumber(dialog.spellInput:GetText()), 30, "Spell input complements the slider")
+    dialog.slider:SetValue(65.5)
+    equal(tonumber(dialog.meleeInput:GetText()), 65.5, "slider updates the Melee input with fractional percentages")
+    equal(tonumber(dialog.spellInput:GetText()), 34.5, "slider updates the Spell complement")
+    dialog.cancel:Fire("OnClick")
+    splitButton:Fire("OnClick")
+    equal(dialog.slider:GetValue(), 70, "Cancel discards split-dialog changes")
+    userText(dialog.meleeInput, "63.125")
+    equal(dialog.slider:GetValue(), 63.125, "editing Melee percentage synchronizes the slider")
+    equal(tonumber(dialog.spellInput:GetText()), 36.875, "editing Melee synchronizes Spell")
+    userText(dialog.spellInput, "12.5")
+    equal(dialog.slider:GetValue(), 87.5, "editing Spell synchronizes the Melee slider")
+    equal(tonumber(dialog.meleeInput:GetText()), 87.5, "editing Spell synchronizes Melee input")
+    userText(dialog.meleeInput, "101")
+    check(not dialog.apply.enabled, "out-of-range split percentages cannot be accepted")
+    dialog.apply:Fire("OnClick")
+    check(dialog:IsShown(), "invalid split leaves the dialog open")
+    dialog.defaults:Fire("OnClick")
+    equal(dialog.slider:GetValue(), 70, "Class default restores the selected specialization's suggested split")
+    dialog.slider:SetValue(25)
+    dialog.apply:Fire("OnClick")
+    check(not dialog:IsShown(), "Use split closes its dialog")
+    equal(profile.critMeleeShare, savedShare, "Use split keeps the saved distribution pending until Apply weights")
+    click("Rating")
+    splitButton:Fire("OnClick")
+    equal(dialog.slider:GetValue(), 25, "rating toggle retains the pending split")
+    check(dialog.preview:GetText():find("rating", 1, true), "split preview follows rating display units")
+    dialog.cancel:Fire("OnClick")
+    click("Apply weights")
+    equal(profile.weights.meleeCrit, 2.25, "Apply saves the draft melee share")
+    equal(profile.weights.spellCrit, 6.75, "Apply saves the complementary spell share")
+    equal(profile.critMeleeShare, 0.25, "Apply persists the distribution metadata")
+    equal(profile.weights.strength, 3.25, "Apply saves other pending weights alongside the split")
+    splitButton:Fire("OnClick")
+    local staleSplit = dialog.apply:GetScript("OnClick")
+    local otherProfile = assert(FW:CreateProfile("Class/split switch", {}))
+    find(function(control) return control.profileID == otherProfile.id end):Fire("OnClick")
+    check(not dialog:IsShown(), "switching profiles closes the previous Crit dialog")
+    staleSplit()
+    equal(otherProfile.weights.meleeCrit, 0, "stale split callbacks cannot modify another profile")
+    classButton:Fire("OnClick")
+    find(function(control) return control.profileID == profile.id end):Fire("OnClick")
+    check(not picker:IsShown(), "switching profiles closes the class selector")
+    FW:DeleteProfile(otherProfile.id)
+    -- Explicit signed exports retain their exact channels through unit toggles
+    -- and unchanged Apply, even though a percentage slider cannot show them.
+    local preciseMelee, preciseSpell = 1.2345678901234567, -7.6543210987654321
+    assert(FW:UpdateProfile(profile.id, { weights = { meleeCrit = preciseMelee, spellCrit = preciseSpell } }))
+    splitButton:Fire("OnEnter")
+    check(table.concat(previewLines, "\n"):find("Custom split", 1, true), "opposite-sign weights show a custom split preview")
+    splitButton:Fire("OnClick")
+    check(dialog.help:GetText():find("opposite-sign", 1, true), "editing a custom split explains replacement")
+    dialog.cancel:Fire("OnClick")
+    for _ = 1, 5 do click("Percent") click("Rating") end
+    click("Apply weights")
+    equal(profile.weights.meleeCrit, preciseMelee, "unchanged merged field preserves exact signed melee weight")
+    equal(profile.weights.spellCrit, preciseSpell, "unchanged merged field preserves exact signed spell weight")
+    click("Percent")
+    assert(FW:UpdateProfile(profile.id, { classSpec = savedClass, critMeleeShare = savedShare,
+        weights = { meleeCrit = 2, spellCrit = 7, strength = 2.5 } }))
+    ZwykValuesStatsScroll:SetVerticalScroll(scroll)
+    strength:ClearFocus()
+    equal(profile.name, name, "class/split edits do not rename the profile")
+    GameTooltip = oldTooltip
 end
 do
     local manaBox = weightBox("Mana")
@@ -608,7 +714,7 @@ equal(profile.icon, nil, "profile icons are optional by default")
 check(not iconControl.children[1]:IsShown(), "a profile without an icon has no preview texture")
 local profileRow = find(function(control) return control.kind == "Button" and control.profileID == profile.id end)
 local _, _, _, noIconOffset = profileRow.name:GetPoint()
-equal(noIconOffset, 29, "profiles without icons keep the original name alignment")
+equal(noIconOffset, 53, "profiles without icons keep the original name alignment")
 userText(name, "Icon draft name")
 userText(color, "#AABBCC")
 userText(strength, "9.5")
@@ -660,7 +766,7 @@ check(iconControl.children[1]:IsShown(), "selected icon preview is visible")
 equal(profileRow.icon.texture, profile.icon, "profile list displays its selected icon")
 check(profileRow.icon:IsShown(), "profile list icon is visible")
 local _, _, _, withIconOffset = profileRow.name:GetPoint()
-equal(withIconOffset, 53, "profile names leave space for an optional icon")
+equal(withIconOffset, 77, "profile names leave space for an optional icon")
 equal(name:GetText(), "Icon draft name", "icon changes preserve unsaved profile names")
 equal(color:GetText(), "#AABBCC", "icon changes preserve unsaved HEX colors")
 equal(strength:GetText(), "9.5", "icon changes preserve unsaved weights")
@@ -732,7 +838,7 @@ iconDialog.none:Fire("OnClick")
 equal(profile.icon, nil, "None removes the saved profile icon")
 check(not profileRow.icon:IsShown(), "clearing an icon hides it in the profile list")
 local _, _, _, restoredOffset = profileRow.name:GetPoint()
-equal(restoredOffset, 29, "clearing an icon restores the original name alignment")
+equal(restoredOffset, 53, "clearing an icon restores the original name alignment")
 equal(profile.revision, iconRevision, "removing an icon leaves score revisions unchanged")
 iconControl:Fire("OnClick")
 local staleIconClick, staleNoneClick = iconCell:GetScript("OnClick"), iconDialog.none:GetScript("OnClick")
@@ -844,34 +950,30 @@ userText(attackBox, "0")
 gear("strength"):Fire("OnEnter")
 check(sourceHighlighted("Attack power"), "zero-weight source inputs are still highlighted")
 do
-    local meleeCritBox, spellCritBox = weightBox("Melee critical strike (%)"), weightBox("Spell critical strike (%)")
     local function contribution(label)
         for _, columns in ipairs(calculatorDoubleLines) do if columns.left == label then return columns.right end end
     end
-    userText(meleeCritBox, "2")
-    userText(spellCritBox, "7")
+    setCritWeights(2, 7)
     gear("agility"):Fire("OnEnter")
-    check(sourceHighlighted("Melee critical strike (%)") and not sourceHighlighted("Spell critical strike (%)"), "Agility highlights only the melee critical-strike input")
+    check(sourceHighlighted("Critical strike (%)"), "Agility highlights the combined Crit input for its melee share")
     check(contribution("Melee critical strike") and contribution("Melee critical strike"):find("x 2", 1, true), "Agility calculation uses the melee critical-strike draft weight")
     equal(contribution("Spell critical strike"), nil, "Agility does not calculate with the spell critical-strike weight")
     click("Rating")
-    userText(weightBox("Melee crit (rating)"), "0.5")
+    setCritWeights(7, 7)
     gear("agility"):Fire("OnEnter")
     check(contribution("Melee critical strike"):find("x 7", 1, true), "calculator converts rating draft inputs back to percentage-point weights")
     check(table.concat(calculatorLines, "\n"):find("Secondary formula inputs use weights per 1%", 1, true), "rating-mode calculator explains canonical formula units")
-    check(sourceHighlighted("Melee crit (rating)"), "rating-mode source highlighting follows the renamed field")
+    check(sourceHighlighted("Critical strike (rating)"), "rating-mode source highlighting follows the combined field")
     click("Percent")
-    userText(meleeCritBox, "2")
+    setCritWeights(2, 7)
     gear("intellect"):Fire("OnEnter")
-    check(sourceHighlighted("Spell critical strike (%)") and not sourceHighlighted("Melee critical strike (%)"), "Intellect highlights only the spell critical-strike input")
+    check(sourceHighlighted("Critical strike (%)"), "Intellect highlights the combined Crit input for its spell share")
     check(contribution("Spell critical strike") and contribution("Spell critical strike"):find("x 7", 1, true), "Intellect calculation uses the spell critical-strike draft weight")
     equal(contribution("Melee critical strike"), nil, "Intellect does not calculate with the melee critical-strike weight")
-    userText(meleeCritBox, "0")
-    userText(spellCritBox, "0")
+    setCritWeights(0, 0)
 end
 gear("mana"):Fire("OnEnter")
-check(sourceHighlighted("Intellect") and sourceHighlighted("Spell critical strike (%)"), "Mana hover highlights each modeled inverse input")
-check(not sourceHighlighted("Melee critical strike (%)"), "Mana inverse calculation leaves melee critical strike unhighlighted")
+check(sourceHighlighted("Intellect") and sourceHighlighted("Critical strike (%)"), "Mana hover highlights the combined Crit input for its spell share")
 check(not sourceHighlighted("Attack power") and not sourceHighlighted("Block value"), "switching cogs replaces earlier highlights")
 local actualUnitClass = UnitClass
 UnitClass = function() return "Rogue", "ROGUE" end
@@ -974,7 +1076,7 @@ calculationDialog.use:Fire("OnClick")
 equal(tonumber(weightBox("Mana"):GetText()), 3, "Mana gear fills the inverse Intellect conversion")
 C_Traits.GetNodeInfo = actualTraitInfo
 userText(weightBox("Intellect"), "0")
-userText(weightBox("Spell critical strike (%)"), "10")
+setCritWeights(0, 10)
 gear("mana"):Fire("OnEnter")
 check(table.concat(calculatorLines, "\n"):find("Intellect breakdown", 1, true), "Mana explains its inputs in Intellect units")
 local critDeduction, intellectInput
@@ -990,7 +1092,7 @@ check(calculationDialog.details:GetText():find("exceed the Intellect weight", 1,
 check(not calculationDialog.details:GetText():find("Data source", 1, true) and not calculationDialog.details:GetText():find("Assumptions", 1, true), "calculation prompts omit sources and general assumptions too")
 calculationDialog.cancel:Fire("OnClick")
 userText(weightBox("Intellect"), "45")
-userText(weightBox("Spell critical strike (%)"), "0")
+setCritWeights(0, 0)
 local spirit, mp5 = weightBox("Spirit"), weightBox("Mana per 5 seconds")
 userText(mp5, "4")
 gear("spirit"):Fire("OnClick")
@@ -1318,6 +1420,8 @@ staleCalculation()
 equal(profile.weights.strength, 4, "stale calculation callbacks do not change another profile")
 equal(profile.comparisonTarget.mode, "equipped", "stale target callbacks do not change another profile")
 
+click("Global settings")
+check(FW.GlobalSettingsFrame and FW.GlobalSettingsFrame:IsShown(), "Global settings opens the shared options popup")
 local debug = find(function(control) return control.optionKey == "debugUnknownStats" end)
 check(not debug:GetChecked(), "unknown-stat debug option starts disabled")
 debug:SetChecked(true)
@@ -1363,6 +1467,8 @@ click("Copy")
 equal(#FW:GetProfiles(), 2, "copy creates another profile")
 local copied = FW:GetProfiles()[2]
 equal(copied.weights.strength, 4, "copy retains saved weights")
+equal(copied.classSpec, profile.classSpec, "copy retains the profile class/spec")
+equal(copied.critMeleeShare, profile.critMeleeShare, "copy retains the saved Crit distribution")
 click("Item filters")
 check(not weaponFilter:GetChecked() and not armorFilter:GetChecked() and not otherClasses:GetChecked(), "copied profile keeps original item filters")
 weaponFilter:SetChecked(true)
@@ -1459,6 +1565,7 @@ equal(imported.weights.expertise, 1.75, "import supports Forever expertise")
 click("New")
 equal(#FW:GetProfiles(), 4, "New creates a blank profile")
 equal(FW:GetProfiles()[4].weights.strength, 0, "new profile is deliberately unweighted")
+equal(FW:GetProfiles()[4].classSpec, FW:GetDefaultProfileClass(), "new profile defaults to the current class or obvious specialization")
 click("Delete")
 equal(#FW:GetProfiles(), 4, "deleting requires the native confirmation")
 check(popup and popup.kind == "ZWYKVALUES_DELETE_PROFILE")
@@ -1488,15 +1595,15 @@ check(calculationDialog:GetHeight() <= 560, "long calculation prompts stay withi
 for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     FW.UI:SetSize(table.unpack(dimensions))
     FW.UI:Fire("OnSizeChanged")
-    within(byText("Mark unrecognized stats", "FontString"), FW.UI, "debug label fits minimum width")
-    within(byText("Show upgrade comparisons", "FontString"), FW.UI, "comparison label fits minimum width")
+    within(byText("Mark unrecognized stats", "FontString"), FW.GlobalSettingsFrame, "debug label fits global settings")
+    within(byText("Show upgrade comparisons", "FontString"), FW.GlobalSettingsFrame, "comparison label fits global settings")
     separate(byText("Mark unrecognized stats", "FontString"), find(function(control) return control.optionKey == "showComparisons" end), "footer options do not overlap")
-    separate(byText("Fixed weights ignore caps, procs, sets and rotations.", "FontString"), debug, "footer note leaves space for options")
+    separate(byText("Fixed weights ignore caps, procs, sets and rotations.", "FontString"), byText("Global settings", "Button"), "footer note leaves space for Global settings")
     separate(byText("Weights saved", "FontString"), byText("Weights JSON", "Button"), "weight state does not overlap action buttons")
     within(byText("Apply weights", "Button"), FW.UI, "apply button fits editor")
     within(byText("Clear cache", "Button"), FW.UI, "cache button fits footer")
     check(ZwykValuesStatsScroll:GetHeight() >= 190, "resized editor keeps useful visible weight area")
-    for _, control in ipairs({ critical, byText("Melee critical strike (%)", "FontString"), defense }) do
+    for _, control in ipairs({ critical, defense }) do
         check(#control:GetText() * control.fontSize * .56 <= control:GetWidth(), "secondary units fit beside their weights at minimum width")
         local box
         for _, child in ipairs(control.parent.children) do if child.kind == "EditBox" then box = child end end
@@ -1506,6 +1613,13 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     within(byText("Item filters", "Button"), FW.UI, "filter button fits minimum editor width")
     within(swatch, FW.UI, "clickable color square fits minimum editor width")
     within(iconControl, FW.UI, "optional icon control fits minimum editor width")
+    within(find(function(control) return control.isProfileClass end), FW.UI, "class icon fits minimum editor width")
+    separate(iconControl, find(function(control) return control.isProfileClass end), "class icon stays separate from the profile icon")
+    within(ZwykValuesCritDistribution, FW.UI, "Crit split dialog fits minimum editor size")
+    within(ZwykValuesCritDistribution.meleeInput, ZwykValuesCritDistribution, "Melee split input fits its dialog")
+    within(ZwykValuesCritDistribution.spellInput, ZwykValuesCritDistribution, "Spell split input fits its dialog")
+    separate(ZwykValuesCritDistribution.meleeInput, ZwykValuesCritDistribution.spellInput, "split inputs stay separate")
+    within(ZwykValuesProfileClassPicker, FW.UI, "class selector fits minimum editor size")
     separate(iconControl, swatch, "icon picker does not overlap the color square")
     within(iconDialog, FW.UI, "icon dialog fits minimum editor size")
     within(dialogText.importDialog, FW.UI, "extended import dialog fits minimum editor size")
@@ -1609,10 +1723,9 @@ for _, dimensions in ipairs({ {930, 720}, {850, 600} }) do
     separate(upgradePanel, byText("New", "Button"), "upgrade settings leave room for profile buttons")
     check(ZwykValuesProfilesScroll:GetHeight() >= 170, "compact settings retain useful profile list height")
     for _, control in ipairs(arrowControls) do
-        within(control, upgradePanel, "arrow location checkbox fits panel")
-        for _, child in ipairs(control.children) do within(child, upgradePanel, "arrow location label fits panel") end
-        separate(main, control, "main choice does not overlap arrow locations")
-        separate(comparisonButton, control, "target selector does not overlap arrow location controls")
+        within(control, FW.GlobalSettingsFrame, "arrow location checkbox fits global settings")
+        for _, child in ipairs(control.children) do within(child, FW.GlobalSettingsFrame, "arrow location label fits global settings") end
+        separate(byText("Global settings", "Button"), main, "global settings access stays separate from per-profile controls")
     end
     separate(arrowControls[1], arrowControls[2], "bag and roll arrow toggles do not overlap")
     separate(arrowControls[2], arrowControls[3], "roll and chat arrow toggles do not overlap")

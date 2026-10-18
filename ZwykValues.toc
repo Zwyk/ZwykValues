@@ -2,11 +2,12 @@
 ## Title: ZwykValues
 ## Notes: Custom stat-weight profiles, cached item scores, and equipped comparisons for WoW Forever.
 ## Author: Felix
-## Version: 0.1.30
+## Version: 0.1.31
 ## SavedVariables: ZwykValuesDB
 
 JSON.lua
 Stats.lua
+ProfileClasses.lua
 Imports.lua
 Core.lua
 DerivedWeights.lua
@@ -18,6 +19,7 @@ Indicators.lua
 AuctionIndicators.lua
 Tooltips.lua
 IconCatalog.lua
+GlobalSettings.lua
 UI.lua
 Settings.lua
 Bootstrap.lua

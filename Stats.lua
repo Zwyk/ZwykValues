@@ -80,3 +80,25 @@ function FW:WeightFromDisplay(key, value, unit)
     local rate = ratingPerPercent[key]
     return unit == "rating" and rate and value * rate or value
 end
+
+-- Keep the explicit scoring channels, even though the editor presents their
+-- sum. The remainder avoids increasing generic crit through rounding twice.
+function FW:DistributeCritWeight(total, meleeShare)
+    local melee = total * meleeShare
+    return melee, total - melee
+end
+
+function FW:GetCritDistribution(weights, fallbackShare)
+    local melee, spell = (weights and weights.meleeCrit) or 0, (weights and weights.spellCrit) or 0
+    local total = melee + spell
+    local share = fallbackShare or 0.5
+    if total ~= 0 then
+        local inferred = melee / total
+        if inferred >= 0 and inferred <= 1 then return total, inferred, true end
+    elseif melee == 0 and spell == 0 then
+        return total, share, true
+    end
+    -- Opposite-sign legacy weights cannot be represented by a 0..100% split.
+    -- Callers preserve that exact pair until the user edits the total or split.
+    return total, share, false
+end

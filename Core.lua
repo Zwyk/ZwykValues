@@ -175,7 +175,7 @@ local function copySavedTable(value, seen)
     return result
 end
 
-local function validWeights(weights)
+local function validWeights(weights, meleeShare)
     if not plainObject(weights) then return nil, "Weights must be a JSON object of stat names and numbers." end
     if weights.crit ~= nil and (weights.meleeCrit ~= nil or weights.spellCrit ~= nil) then
         return nil, "Legacy crit cannot be mixed with meleeCrit or spellCrit weights."
@@ -195,8 +195,31 @@ local function validWeights(weights)
     local result = cloneWeights(weights)
     -- A generic item crit bonus supplies both channels. Splitting an old
     -- combined weight preserves its value without inventing a new priority.
-    if weights.crit ~= nil then result.meleeCrit, result.spellCrit = weights.crit / 2, weights.crit / 2 end
+    if weights.crit ~= nil then
+        result.meleeCrit, result.spellCrit = FW:DistributeCritWeight(weights.crit, meleeShare or 0.5)
+    end
     return result
+end
+
+local function validProfileClass(key)
+    if (not issecretvalue or not issecretvalue(key)) and type(key) == "string"
+        and (key == "any" or (FW.GetProfileClass and FW:GetProfileClass(key))) then return key end
+    return nil, "Unknown profile class or specialization."
+end
+
+local function validCritShare(value)
+    if (not issecretvalue or not issecretvalue(value)) and finite(value) and value >= 0 and value <= 1 then return value end
+    return nil, "Melee critical strike share must be a number between 0 and 1."
+end
+
+local function classCritShare(key)
+    local definition = FW.GetProfileClass and FW:GetProfileClass(key)
+    return definition and definition.meleeShare or 0.5
+end
+
+local function inferCritShare(weights, fallback)
+    local _, share = FW:GetCritDistribution(weights, fallback)
+    return share
 end
 
 local function validName(name)
@@ -374,6 +397,8 @@ function FW:Initialize()
     db.nextProfileID = finite(db.nextProfileID) and math.max(1, math.floor(db.nextProfileID)) or 1
     db.options = type(db.options) == "table" and db.options or {}
     if db.options.showComparisons == nil then db.options.showComparisons = true end
+    if db.options.showProfileIcon == nil then db.options.showProfileIcon = true end
+    if db.options.showClassIcon == nil then db.options.showClassIcon = true end
     for key in pairs(upgradeOptions) do db.options[key] = db.options[key] == true end
     -- Diagnostics have their own lifetime: cache eviction or clearing cached
     -- scores must not discard the problem items the user wants to export.
@@ -402,6 +427,11 @@ function FW:Initialize()
             and profile.upgradeEnabled == nil and db.options.mainProfileID == id)
         profile.color = validColor(profile.color) or { r = defaultColor.r, g = defaultColor.g, b = defaultColor.b }
         profile.icon = validIcon(profile.icon)
+        -- Existing profiles keep their exact channel weights and score. Never
+        -- guess a saved profile's intended class from the logged-in character.
+        profile.classSpec = validProfileClass(profile.classSpec) or "any"
+        profile.critMeleeShare = inferCritShare(weights,
+            validCritShare(profile.critMeleeShare) or classCritShare(profile.classSpec))
         local target = profile.comparisonTarget
         -- A broken saved set reference stays unresolved instead of silently
         -- comparing against currently equipped gear on another character.
@@ -455,6 +485,7 @@ end
 
 function FW:NotifyChanged()
     if self.InvalidateUpgradeComparisons then self:InvalidateUpgradeComparisons() end
+    if self.RefreshGlobalSettings then self:RefreshGlobalSettings() end
     if self.RefreshUI then self:RefreshUI() end
     if self.RefreshTooltips then self:RefreshTooltips() end
     if self.RefreshUpgradeIndicators then self:RefreshUpgradeIndicators() end
@@ -506,6 +537,19 @@ function FW:SetMainProfile(id)
     return true
 end
 
+function FW:SetGlobalOption(key, value)
+    self:Initialize()
+    if key ~= "showComparisons" and key ~= "debugUnknownStats" and key ~= "showProfileIcon" and key ~= "showClassIcon" then
+        return nil, "Unknown global display option."
+    end
+    if type(value) ~= "boolean" then return nil, "Global display options must be true or false." end
+    if self.DB.options[key] ~= value then
+        self.DB.options[key] = value
+        self:NotifyChanged()
+    end
+    return true
+end
+
 function FW:SetUpgradeOption(key, value)
     self:Initialize()
     if not upgradeOptions[key] then return nil, "Unknown upgrade-arrow option." end
@@ -517,12 +561,27 @@ function FW:SetUpgradeOption(key, value)
     return true
 end
 
-function FW:CreateProfile(name, weights)
+function FW:CreateProfile(name, weights, metadata)
     self:Initialize()
     local checkedName, errorMessage = validName(name)
     if not checkedName then return nil, errorMessage end
+    if metadata ~= nil then
+        if not plainObject(metadata) then return nil, "Profile metadata must be a table." end
+        for key in pairs(metadata) do
+            if key ~= "classSpec" and key ~= "critMeleeShare" then return nil, "Unknown profile metadata field '" .. key .. "'." end
+        end
+    end
+    metadata = metadata or {}
+    local classSpec = metadata.classSpec or (self.GetDefaultProfileClass and self:GetDefaultProfileClass()) or "any"
+    classSpec, errorMessage = validProfileClass(classSpec)
+    if not classSpec then return nil, errorMessage end
+    local meleeShare = classCritShare(classSpec)
+    if metadata.critMeleeShare ~= nil then
+        meleeShare, errorMessage = validCritShare(metadata.critMeleeShare)
+        if not meleeShare then return nil, errorMessage end
+    end
     local checkedWeights
-    checkedWeights, errorMessage = validWeights(weights or {})
+    checkedWeights, errorMessage = validWeights(weights or {}, meleeShare)
     if not checkedWeights then return nil, errorMessage end
     local db, id = self.DB
     repeat
@@ -532,6 +591,7 @@ function FW:CreateProfile(name, weights)
     local profile = {
         id = id, name = checkedName, active = true, upgradeEnabled = false,
         color = { r = defaultColor.r, g = defaultColor.g, b = defaultColor.b },
+        classSpec = classSpec, critMeleeShare = inferCritShare(checkedWeights, meleeShare),
         weights = checkedWeights, revision = 1, secondaryUnit = "percent", secondaryDisplayUnit = "percent", itemFilters = cloneItemFilters(),
         comparisonTarget = {mode="equipped"},
     }
@@ -562,7 +622,8 @@ function FW:UpdateProfile(id, changes)
     if not profile then return nil, "Profile not found." end
     if not plainObject(changes) then return nil, "Profile changes must be a table." end
     local allowed = { name = true, active = true, color = true, icon = true, weights = true, secondaryUnit = true,
-        secondaryDisplayUnit = true, itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true }
+        secondaryDisplayUnit = true, itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true,
+        classSpec = true, critMeleeShare = true }
     for key in pairs(changes) do if not allowed[key] then return nil, "Unknown profile field '" .. key .. "'." end end
     local replacement, errorMessage = { secondaryUnit = "percent" }
     if changes.name ~= nil then
@@ -593,6 +654,14 @@ function FW:UpdateProfile(id, changes)
         replacement.icon, errorMessage = validIcon(changes.icon)
         if not replacement.icon then return nil, errorMessage end
     end
+    if changes.classSpec ~= nil then
+        replacement.classSpec, errorMessage = validProfileClass(changes.classSpec)
+        if not replacement.classSpec then return nil, errorMessage end
+    end
+    if changes.critMeleeShare ~= nil then
+        replacement.critMeleeShare, errorMessage = validCritShare(changes.critMeleeShare)
+        if replacement.critMeleeShare == nil then return nil, errorMessage end
+    end
     if changes.secondaryUnit ~= nil then
         replacement.secondaryUnit, errorMessage = validUnit(changes.secondaryUnit)
         if not replacement.secondaryUnit then return nil, errorMessage end
@@ -605,7 +674,9 @@ function FW:UpdateProfile(id, changes)
     end
     if changes.weights ~= nil then
         local checked
-        checked, errorMessage = validWeights(changes.weights)
+        -- Preserve the old combined-crit API's even split unless the caller
+        -- explicitly supplies the new distribution metadata.
+        checked, errorMessage = validWeights(changes.weights, replacement.critMeleeShare)
         if not checked then return nil, errorMessage end
         replacement.weights = cloneWeights(profile.weights)
         -- Partial programmatic updates leave unspecified weights unchanged.
@@ -614,6 +685,23 @@ function FW:UpdateProfile(id, changes)
                 replacement.weights.meleeCrit, replacement.weights.spellCrit = checked.meleeCrit, checked.spellCrit
             else replacement.weights[key] = checked[key] end
         end
+        if changes.weights.crit ~= nil or changes.weights.meleeCrit ~= nil or changes.weights.spellCrit ~= nil then
+            local total, inferred, representable = self:GetCritDistribution(replacement.weights,
+                replacement.critMeleeShare or profile.critMeleeShare)
+            if changes.critMeleeShare ~= nil and total ~= 0 and representable
+                and math.abs(inferred - replacement.critMeleeShare) > 0.000000001 then
+                return nil, "Critical strike weights do not match the selected distribution."
+            end
+            replacement.critMeleeShare = inferCritShare(replacement.weights,
+                replacement.critMeleeShare or profile.critMeleeShare)
+        elseif replacement.critMeleeShare ~= nil then
+            local total = self:GetCritDistribution(replacement.weights, profile.critMeleeShare)
+            replacement.weights.meleeCrit, replacement.weights.spellCrit = self:DistributeCritWeight(total, replacement.critMeleeShare)
+        end
+    elseif replacement.critMeleeShare ~= nil then
+        local total = self:GetCritDistribution(profile.weights, profile.critMeleeShare)
+        replacement.weights = cloneWeights(profile.weights)
+        replacement.weights.meleeCrit, replacement.weights.spellCrit = self:DistributeCritWeight(total, replacement.critMeleeShare)
     end
     if changes.itemFilters ~= nil then
         replacement.itemFilters, errorMessage = validItemFilters(changes.itemFilters, profile.itemFilters)
@@ -661,7 +749,8 @@ function FW:CopyProfile(id)
         while #prefix > 0 and not self.JSON.Encode(prefix) do prefix = prefix:sub(1, -2) end
         name = prefix .. " (copy " .. suffix .. ")"
     end
-    local profile, errorMessage = self:CreateProfile(name, original.weights)
+    local profile, errorMessage = self:CreateProfile(name, original.weights,
+        {classSpec=original.classSpec or "any", critMeleeShare=original.critMeleeShare or 0.5})
     if not profile then return nil, errorMessage end
     profile.active = original.active
     profile.color = { r = original.color.r, g = original.color.g, b = original.color.b }
@@ -684,17 +773,33 @@ function FW:ImportProfile(source, fallbackName, importOptions)
     if decoded == nil then return nil, errorMessage end
     if not plainObject(decoded) then return nil, "Import must be a weight object or a ZwykValues profile object." end
     local weights, name, color, icon, unit, filters, upgradeEnabled, comparisonTarget, calculationOptions, displayUnit
+    local classSpec, critMeleeShare = "any", 0.5
     warnings = warnings or {}
     if decoded.weights ~= nil or decoded.format ~= nil then
         local allowed = { format = true, version = true, name = true, color = true, icon = true, secondaryUnit = true,
-            secondaryDisplayUnit = true, weights = true, itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true }
+            secondaryDisplayUnit = true, weights = true, itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true,
+            classSpec = true, critMeleeShare = true }
         for key in pairs(decoded) do if not allowed[key] then return nil, "Unknown profile field '" .. key .. "'." end end
         if decoded.format ~= "ZwykValues" and decoded.format ~= "ZwykPoints" and decoded.format ~= "ForeverWeights" then
             return nil, "Profile format must be 'ZwykValues', 'ZwykPoints' or 'ForeverWeights'."
         end
         if decoded.version ~= 1 then return nil, "Unsupported profile version (expected 1)." end
-        weights, errorMessage = validWeights(decoded.weights)
+        if decoded.classSpec ~= nil then
+            classSpec, errorMessage = validProfileClass(decoded.classSpec)
+            if not classSpec then return nil, errorMessage end
+        end
+        critMeleeShare = classCritShare(classSpec)
+        if decoded.critMeleeShare ~= nil then
+            critMeleeShare, errorMessage = validCritShare(decoded.critMeleeShare)
+            if critMeleeShare == nil then return nil, errorMessage end
+        end
+        weights, errorMessage = validWeights(decoded.weights, critMeleeShare)
         if not weights then return nil, errorMessage end
+        local total, inferred, representable = self:GetCritDistribution(weights, critMeleeShare)
+        if decoded.critMeleeShare ~= nil and total ~= 0 and representable
+            and math.abs(inferred - critMeleeShare) > 0.000000001 then
+            return nil, "Critical strike weights do not match the selected distribution."
+        end
         name, errorMessage = validName(fallbackName or decoded.name or "Imported profile")
         if not name then return nil, errorMessage end
         color, errorMessage = validColor(decoded.color or defaultColor)
@@ -741,10 +846,14 @@ function FW:ImportProfile(source, fallbackName, importOptions)
     end
     local sourceWeights = decoded.weights or decoded
     if sourceWeights.crit ~= nil then
-        table.insert(warnings, 1, "Combined Crit split evenly between Melee and Spell Crit; review both weights. This preserves generic crit's total value.")
+        table.insert(warnings, 1, critMeleeShare == 0.5
+            and "Combined Crit split evenly between Melee and Spell Crit; review both weights. This preserves generic crit's total value."
+            or ("Combined Crit allocated " .. string.format("%.6g", critMeleeShare * 100) .. "% Melee / "
+                .. string.format("%.6g", (1 - critMeleeShare) * 100)
+                .. "% Spell using the profile's setting. This preserves generic crit's total value."))
     end
     local profile
-    profile, errorMessage = self:CreateProfile(name, weights)
+    profile, errorMessage = self:CreateProfile(name, weights, {classSpec=classSpec, critMeleeShare=critMeleeShare})
     if not profile then return nil, errorMessage end
     profile.color, profile.icon, profile.secondaryUnit = color, icon, unit
     profile.secondaryDisplayUnit = displayUnit or "percent"
@@ -766,6 +875,7 @@ function FW:ExportProfile(id, bare)
         format = "ZwykValues", version = 1, name = profile.name,
         color = { r = profile.color.r, g = profile.color.g, b = profile.color.b },
         icon = profile.icon,
+        classSpec = profile.classSpec or "any", critMeleeShare = profile.critMeleeShare or 0.5,
         upgradeEnabled = profile.upgradeEnabled == true,
         comparisonTarget = copySavedTable(profile.comparisonTarget or {mode="equipped"}),
         calculationOptions = copySavedTable(profile.calculationOptions),

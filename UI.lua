@@ -8,11 +8,15 @@ local closeColorPicker
 local closeIconPicker
 local refreshComparisonTarget
 local draftWeights
+local showCritDistribution
+local showClassPicker
 local function closeProfileDialogs()
     if not UI then return end
-    UI.comparisonSession, UI.calculationSession = nil, nil
+    UI.comparisonSession, UI.calculationSession, UI.classSession, UI.critSession = nil, nil, nil, nil
     if UI.comparisonDialog then UI.comparisonDialog:Hide() end
     if UI.calculationDialog then UI.calculationDialog:Hide() end
+    if UI.classDialog then UI.classDialog:Hide() end
+    if UI.critDialog then UI.critDialog:Hide() end
 end
 local ROW_HEIGHT = 30
 local unpack = unpack or table.unpack
@@ -142,7 +146,7 @@ local function highlightCalculationSources(owner, result)
     UI.calculationSources = {}
     UI.calculationSourceOwner, UI.calculationSourceProfile = owner, profile
     for _, field in ipairs(UI.fields) do
-        if keys[field.key] then
+        if keys[field.key] or field.key == "crit" and (keys.meleeCrit or keys.spellCrit) then
             if not field.sourceHighlight then
                 field.sourceHighlight = field.frame:CreateTexture(nil, "BACKGROUND")
                 field.sourceHighlight:SetAllPoints()
@@ -205,6 +209,26 @@ local function displayWeight(field, value, unit)
     setWeightText(field.box, text)
 end
 
+local function displayWeightDraft(field, weights, unit)
+    if field.key == "crit" then
+        field.meleeValue, field.spellValue = weights.meleeCrit or 0, weights.spellCrit or 0
+        displayWeight(field, field.meleeValue + field.spellValue, unit)
+    else
+        displayWeight(field, weights[field.key] or 0, unit)
+    end
+end
+
+local function profileClass(profile)
+    return FW.GetProfileClass and FW:GetProfileClass(profile and profile.classSpec or "any") or
+        { key = "any", label = "Any", icon = "Interface\\Icons\\INV_Misc_QuestionMark", meleeShare = 0.5 }
+end
+
+local function markWeightDraft()
+    UI.dirtyWeights = true
+    UI.weightState:SetText("Unsaved weights")
+    UI.weightState:SetTextColor(1, 0.78, 0.35)
+end
+
 local function updateUnitHelp(profile)
     local unit = displayUnit(profile)
     UI.unitHelp:SetText(unit == "rating" and "Per 1 rating. Defense: skill." or "Per 1% (1% = 1). Defense: skill.")
@@ -216,8 +240,6 @@ local function updateUnitHelp(profile)
         if field.secondary then
             local suffix = field.key == "defense" and "skill" or unit == "rating" and "rating" or "%"
             local name = field.key == "defense" and "Defense" or field.label
-            if unit == "rating" and field.key == "meleeCrit" then name = "Melee crit" end
-            if unit == "rating" and field.key == "spellCrit" then name = "Spell crit" end
             field.text:SetText(name .. " (" .. suffix .. ")")
         end
     end
@@ -233,7 +255,9 @@ local function refreshEditor(force)
         closeIconPicker()
     end
     if (UI.comparisonSession and UI.comparisonSession.profile ~= profile) or
-       (UI.calculationSession and UI.calculationSession.profile ~= profile) then closeProfileDialogs() end
+       (UI.calculationSession and UI.calculationSession.profile ~= profile) or
+       (UI.classSession and UI.classSession.profile ~= profile) or
+       (UI.critSession and UI.critSession.profile ~= profile) then closeProfileDialogs() end
     local enabled = profile ~= nil
     for _, control in ipairs(UI.profileControls) do
         setEnabled(control, enabled)
@@ -256,14 +280,20 @@ local function refreshEditor(force)
         UI.profileIcon:SetTexture(profile.icon)
         UI.profileIcon:SetShown(profile.icon ~= nil)
         UI.iconNone:SetShown(profile.icon == nil)
+        UI.classIcon:SetTexture(profileClass(profile).icon)
+        if force or not UI.dirtyWeights then
+            local _, share = FW:GetCritDistribution(profile.weights or {}, profile.critMeleeShare or profileClass(profile).meleeShare)
+            UI.draftCritMeleeShare = share
+        end
         updateUnitHelp(profile)
         for _, field in ipairs(UI.fields) do
             setEnabled(field.box, true)
             if field.calculate then setEnabled(field.calculate, true) end
+            if field.distribution then setEnabled(field.distribution, true) end
             if force or not UI.dirtyWeights then
-                displayWeight(field, (profile.weights or {})[field.key] or 0, displayUnit(profile))
+                displayWeightDraft(field, profile.weights or {}, displayUnit(profile))
             elseif canonicalDraft then
-                displayWeight(field, canonicalDraft[field.key], displayUnit(profile))
+                displayWeightDraft(field, canonicalDraft, displayUnit(profile))
             end
         end
         UI.displayUnit = displayUnit(profile)
@@ -276,11 +306,14 @@ local function refreshEditor(force)
         previewColor()
         UI.profileIcon:Hide()
         UI.iconNone:Show()
+        UI.classIcon:SetTexture(profileClass(nil).icon)
+        UI.draftCritMeleeShare = 0.5
         updateUnitHelp(nil)
         for _, field in ipairs(UI.fields) do
-            displayWeight(field, 0, "percent")
+            displayWeightDraft(field, {}, "percent")
             setEnabled(field.box, false)
             if field.calculate then setEnabled(field.calculate, false) end
+            if field.distribution then setEnabled(field.distribution, false) end
         end
         UI.displayUnit = "percent"
         UI.editorTitle:SetText("Create a profile to set weights")
@@ -328,8 +361,17 @@ draftWeights = function(quiet)
             end
             return nil
         end
-        weights[field.key] = text == field.displayText and field.canonicalValue or
-            FW:WeightFromDisplay(field.key, value, UI.displayUnit)
+        if field.key == "crit" then
+            if text == field.displayText then
+                weights.meleeCrit, weights.spellCrit = field.meleeValue, field.spellValue
+            else
+                weights.meleeCrit, weights.spellCrit = FW:DistributeCritWeight(
+                    FW:WeightFromDisplay("crit", value, UI.displayUnit), UI.draftCritMeleeShare or 0.5)
+            end
+        else
+            weights[field.key] = text == field.displayText and field.canonicalValue or
+                FW:WeightFromDisplay(field.key, value, UI.displayUnit)
+        end
     end
     return weights
 end
@@ -346,7 +388,7 @@ local function changeDisplayUnit(unit)
     UI.committing = false
     if not ok then status(err or "Could not change display units.", "error") return end
     UI.loading = true
-    for _, field in ipairs(UI.fields) do displayWeight(field, weights[field.key], unit) end
+    for _, field in ipairs(UI.fields) do displayWeightDraft(field, weights, unit) end
     UI.displayUnit = unit
     UI.loading = false
     FW:RefreshUI()
@@ -357,8 +399,189 @@ local function applyWeights()
     if not selectedProfile() then return end
     local weights = draftWeights()
     if weights then
-        commit({ weights = weights, calculationOptions = UI.draftCalculationOptions }, "weights", "Weights saved. Cached scores will use the updated weights.")
+        commit({ weights = weights, critMeleeShare = UI.draftCritMeleeShare, calculationOptions = UI.draftCalculationOptions }, "weights", "Weights saved. Cached scores will use the updated weights.")
     end
+end
+
+local function setCritDraft(weights, share)
+    local total = (weights.meleeCrit or 0) + (weights.spellCrit or 0)
+    weights.meleeCrit, weights.spellCrit = FW:DistributeCritWeight(total, share)
+    UI.draftCritMeleeShare = share
+    UI.loading = true
+    for _, field in ipairs(UI.fields) do
+        if field.key == "crit" then displayWeightDraft(field, weights, UI.displayUnit) break end
+    end
+    UI.loading = false
+    markWeightDraft()
+end
+
+showCritDistribution = function(field)
+    local profile, weights = selectedProfile(), draftWeights()
+    if not profile or not weights then return end
+    closeProfileDialogs()
+    if not UI.critDialog then
+        local dialog = CreateFrame("Frame", "ZwykValuesCritDistribution", UI.frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        UI.critDialog = dialog
+        dialog:SetSize(440, 282)
+        dialog:SetPoint("CENTER")
+        dialog:SetFrameStrata("DIALOG")
+        dialog:SetFrameLevel(UI.frame:GetFrameLevel() + 20)
+        dialog:EnableMouse(true)
+        backdrop(dialog)
+        dialog.title = label(dialog, "Critical-strike distribution", 14, { 1, 0.82, 0.35 })
+        dialog.title:SetPoint("TOPLEFT", 18, -17)
+        dialog.help = label(dialog, "", 11, { 0.78, 0.84, 0.92 })
+        dialog.help:SetPoint("TOPLEFT", 18, -46)
+        dialog.help:SetWidth(404)
+        dialog.help:SetHeight(44)
+        dialog.help:SetJustifyV("TOP")
+        dialog.slider = CreateFrame("Slider", nil, dialog, "OptionsSliderTemplate")
+        dialog.slider:SetPoint("TOPLEFT", 26, -107)
+        dialog.slider:SetSize(388, 17)
+        dialog.slider:SetMinMaxValues(0, 100)
+        dialog.slider:SetValueStep(0.1)
+        if dialog.slider.SetObeyStepOnDrag then dialog.slider:SetObeyStepOnDrag(false) end
+        label(dialog, "Melee %", 11):SetPoint("TOPLEFT", 24, -137)
+        dialog.meleeInput = editBox(dialog, 76)
+        dialog.meleeInput:SetPoint("TOPLEFT", 92, -130)
+        label(dialog, "Spell %", 11):SetPoint("TOPLEFT", 230, -137)
+        dialog.spellInput = editBox(dialog, 76)
+        dialog.spellInput:SetPoint("TOPLEFT", 294, -130)
+        dialog.preview = label(dialog, "", 11, { 0.65, 0.85, 1 })
+        dialog.preview:SetPoint("TOPLEFT", 24, -173)
+        dialog.preview:SetWidth(392)
+        dialog.preview:SetHeight(35)
+        dialog.preview:SetJustifyV("TOP")
+        dialog.defaults = button(dialog, "Class default", 110)
+        dialog.defaults:SetPoint("BOTTOMLEFT", 18, 17)
+        dialog.cancel = button(dialog, "Cancel", 80, closeProfileDialogs)
+        dialog.cancel:SetPoint("BOTTOMRIGHT", -127, 17)
+        dialog.apply = button(dialog, "Use split", 101)
+        dialog.apply:SetPoint("BOTTOMRIGHT", -18, 17)
+        dialog:SetScript("OnHide", function()
+            UI.critSession = nil
+            dialog.meleeInput:ClearFocus()
+            dialog.spellInput:ClearFocus()
+        end)
+        if UISpecialFrames then table.insert(UISpecialFrames, "ZwykValuesCritDistribution") end
+    end
+    local dialog = UI.critDialog
+    local total, share, representable = FW:GetCritDistribution(weights, UI.draftCritMeleeShare)
+    local session = { profile = profile, weights = weights, share = share }
+    UI.critSession = session
+    dialog.help:SetText((representable and "Set the share assigned to physical attacks and spells." or
+        "Custom opposite-sign weights are preserved until Use split replaces them.") .. " Changes remain pending until Apply weights.")
+    local function update(value, source)
+        if UI.critSession ~= session or session.syncing then return end
+        if not finite(value) or value < 0 or value > 100 then
+            dialog.apply:SetEnabled(false)
+            dialog.preview:SetText("Enter a percentage from 0 to 100.")
+            return
+        end
+        session.syncing = true
+        session.share = value / 100
+        dialog.slider:SetValue(value)
+        if source ~= dialog.meleeInput then setWeightText(dialog.meleeInput, string.format("%.12g", value)) end
+        if source ~= dialog.spellInput then setWeightText(dialog.spellInput, string.format("%.12g", 100 - value)) end
+        local melee, spell = FW:DistributeCritWeight(total, session.share)
+        local unit = UI.displayUnit == "rating" and "rating" or "%"
+        dialog.preview:SetText(string.format("Melee %.6g / Spell %.6g per 1%s\nCombined weight stays %.6g.",
+            FW:WeightToDisplay("crit", melee, UI.displayUnit), FW:WeightToDisplay("crit", spell, UI.displayUnit), unit,
+            FW:WeightToDisplay("crit", total, UI.displayUnit)))
+        dialog.apply:SetEnabled(true)
+        session.syncing = false
+    end
+    dialog.slider:SetScript("OnValueChanged", function(_, value) update(value) end)
+    dialog.meleeInput:SetScript("OnTextChanged", function(self, userInput)
+        if userInput then update(tonumber(trim(self:GetText())), self) end
+    end)
+    dialog.spellInput:SetScript("OnTextChanged", function(self, userInput)
+        if userInput then
+            local value = tonumber(trim(self:GetText()))
+            update(value and 100 - value, self)
+        end
+    end)
+    dialog.defaults:SetScript("OnClick", function() update(profileClass(profile).meleeShare * 100) end)
+    dialog.apply:SetScript("OnClick", function()
+        if UI.critSession ~= session or selectedProfile() ~= profile or not dialog.apply:IsEnabled() then return end
+        setCritDraft(weights, session.share)
+        closeProfileDialogs()
+        status("Crit distribution changed. Apply weights to update item scores.")
+    end)
+    update(share * 100)
+    dialog:Show()
+end
+
+showClassPicker = function()
+    local profile = selectedProfile()
+    if not profile then return end
+    closeProfileDialogs()
+    if not UI.classDialog then
+        local dialog = CreateFrame("Frame", "ZwykValuesProfileClassPicker", UI.frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
+        UI.classDialog = dialog
+        dialog:SetSize(420, 448)
+        dialog:SetPoint("CENTER")
+        dialog:SetFrameStrata("DIALOG")
+        dialog:SetFrameLevel(UI.frame:GetFrameLevel() + 20)
+        dialog:EnableMouse(true)
+        backdrop(dialog)
+        dialog.title = label(dialog, "Profile class or specialization", 14, { 1, 0.82, 0.35 })
+        dialog.title:SetPoint("TOPLEFT", 18, -18)
+        dialog.help = label(dialog, "The selection suggests a Crit split. Apply weights to save it.", 11, { 0.78, 0.84, 0.92 })
+        dialog.help:SetPoint("TOPLEFT", 18, -47)
+        dialog.help:SetSize(380, 32)
+        dialog.help:SetJustifyV("TOP")
+        dialog.scroll = CreateFrame("ScrollFrame", "ZwykValuesProfileClassScroll", dialog, "UIPanelScrollFrameTemplate")
+        dialog.scroll:SetPoint("TOPLEFT", 18, -89)
+        dialog.scroll:SetPoint("BOTTOMRIGHT", -37, 52)
+        dialog.content = CreateFrame("Frame", nil, dialog.scroll)
+        dialog.content:SetWidth(362)
+        dialog.scroll:SetScrollChild(dialog.content)
+        dialog.rows = {}
+        dialog.close = button(dialog, "Close", 85, closeProfileDialogs)
+        dialog.close:SetPoint("BOTTOMRIGHT", -18, 15)
+        dialog:SetScript("OnHide", function() UI.classSession = nil end)
+        if UISpecialFrames then table.insert(UISpecialFrames, "ZwykValuesProfileClassPicker") end
+    end
+    local dialog, session = UI.classDialog, { profile = profile }
+    UI.classSession = session
+    for index, choice in ipairs(FW.ProfileClassChoices or {}) do
+        local row = dialog.rows[index]
+        if not row then
+            row = button(dialog.content, "", 362)
+            row:SetHeight(30)
+            row:SetPoint("TOPLEFT", 0, -(index - 1) * 34)
+            row.icon = row:CreateTexture(nil, "ARTWORK")
+            row.icon:SetPoint("LEFT", 5, 0)
+            row.icon:SetSize(22, 22)
+            row.caption = label(row, "", 11, { 0.88, 0.91, 0.96 })
+            row.caption:SetPoint("LEFT", 34, 0)
+            row.caption:SetPoint("RIGHT", -7, 0)
+            row.caption:SetHeight(24)
+            row.caption:SetWordWrap(false)
+            dialog.rows[index] = row
+        end
+        row.profileClassKey = choice.key
+        row.icon:SetTexture(choice.icon)
+        row.caption:SetText((choice.key == profile.classSpec and "|TInterface\\Buttons\\UI-CheckBox-Check:14:14:0:0|t " or "") .. choice.label)
+        row:SetScript("OnClick", function()
+            if UI.classSession ~= session or selectedProfile() ~= profile then return end
+            local weights = draftWeights()
+            if not weights then return end
+            -- Metadata saves now; the suggested split stays in the weight draft.
+            if not commit({ classSpec = choice.key }, nil, "Profile class saved.") then return end
+            setCritDraft(weights, choice.meleeShare)
+            closeProfileDialogs()
+            status(choice.label .. " selected. Crit split is unsaved; Apply weights to update item scores.")
+        end)
+        hint(row, choice.label, string.format("Default Crit split: Melee %.0f%% / Spell %.0f%%.", choice.meleeShare * 100, (1 - choice.meleeShare) * 100))
+        row:Show()
+    end
+    for index = #(FW.ProfileClassChoices or {}) + 1, #dialog.rows do dialog.rows[index]:Hide() end
+    dialog.content:SetHeight(math.max(1, #(FW.ProfileClassChoices or {}) * 34))
+    dialog.scroll:SetVerticalScroll(0)
+    dialog.scroll:UpdateScrollChildRect()
+    dialog:Show()
 end
 
 local function comparisonContext(profile)
@@ -1517,8 +1740,7 @@ end
 
 local statHints = {
     hit = "The unified hit stat. Weight per 1 percentage point (1% = 1).",
-    meleeCrit = "Critical strike chance for physical attacks, including ranged attacks. Weight per 1 percentage point (1% = 1).",
-    spellCrit = "Critical strike chance for spells. Weight per 1 percentage point (1% = 1).",
+    crit = "Combined critical-strike weight. Generic item crit uses the full value; the distribution control assigns its Melee and Spell shares to class calculations and channel-specific items.",
     haste = "Weight per 1 percentage point (1% = 1).",
     expertise = "Weight per 1 percentage point of reduced dodge/parry chance (1% = 1).",
     dodge = "Weight per 1 percentage point of dodge chance (1% = 1).",
@@ -1542,7 +1764,13 @@ local statHints = {
 local function buildWeightFields()
     UI.fields, UI.fieldGroups = {}, {}
     local groups = {}
+    local definitions = {}
     for _, definition in ipairs(FW.StatDefinitions or {}) do
+        if definition.key == "meleeCrit" then
+            definitions[#definitions + 1] = { key = "crit", label = "Critical strike", secondary = true, group = definition.group }
+        elseif definition.key ~= "spellCrit" then definitions[#definitions + 1] = definition end
+    end
+    for _, definition in ipairs(definitions) do
         local groupName = definition.group or "Stats"
         if type(groupName) ~= "string" then groupName = tostring(groupName) end
         local group = groups[groupName]
@@ -1583,11 +1811,39 @@ local function buildWeightFields()
                     GameTooltip:AddLine(UI.displayUnit == "rating" and "Weight per 1 rating." or "Weight per 1 percentage point (1% = 1).", 0.9, 0.9, 0.9, true)
                     GameTooltip:AddLine("WoWSims Forever conversion: " .. tostring(FW:GetRatingPerPercent(field.key)) .. " rating = 1%. Display conversion keeps item scores unchanged.", 0.7, 0.8, 0.9, true)
                 end
-                GameTooltip:AddLine("Import/export key: " .. field.key, 0.9, 0.9, 0.9, true)
+                if field.key == "crit" then
+                    GameTooltip:AddLine("Generic item crit uses the combined value. Melee-only or spell-only crit uses its chosen share; class calculations use the same split.", 0.9, 0.9, 0.9, true)
+                    GameTooltip:AddLine("Saved weights: meleeCrit and spellCrit", 0.7, 0.8, 0.9, true)
+                else
+                    GameTooltip:AddLine("Import/export key: " .. field.key, 0.9, 0.9, 0.9, true)
+                end
                 GameTooltip:Show()
             end)
         end
-        installCalculationButton(field)
+        if field.key == "crit" then
+            field.distribution = CreateFrame("Button", nil, field.frame)
+            field.distribution:SetSize(18, 18)
+            field.distribution:SetPoint("RIGHT", field.box, "LEFT", -5, 0)
+            field.distribution:SetNormalTexture("Interface\\Buttons\\UI-SortArrow")
+            field.distribution:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
+            field.distribution.isCritDistribution = true
+            field.distribution:SetScript("OnClick", function() showCritDistribution(field) end)
+            field.distribution:SetScript("OnEnter", function(self)
+                local weights = draftWeights(true)
+                if not weights then return end
+                local _, share, representable = FW:GetCritDistribution(weights, UI.draftCritMeleeShare)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Critical-strike distribution", 1, 0.82, 0)
+                GameTooltip:AddLine(representable and string.format("Melee %.3g%% / Spell %.3g%%", share * 100, (1 - share) * 100) or
+                    "Custom split: Melee and Spell weights have opposite signs.", 0.9, 0.9, 0.9, true)
+                local unit = UI.displayUnit == "rating" and "rating" or "%"
+                GameTooltip:AddLine(string.format("Melee %.6g / Spell %.6g per 1%s", FW:WeightToDisplay("crit", weights.meleeCrit, UI.displayUnit),
+                    FW:WeightToDisplay("crit", weights.spellCrit, UI.displayUnit), unit), 0.7, 0.8, 0.9, true)
+                GameTooltip:AddLine("Click to adjust the Melee / Spell shares.", 0.9, 0.9, 0.9, true)
+                GameTooltip:Show()
+            end)
+            field.distribution:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        else installCalculationButton(field) end
         UI.fields[#UI.fields + 1] = field
         group.fields[#group.fields + 1] = field
     end
@@ -1632,7 +1888,7 @@ local function layoutWeights()
             field.frame:ClearAllPoints()
             field.frame:SetPoint("TOPLEFT", column * (columnWidth + gap) + 4, -(y + row * ROW_HEIGHT))
             field.frame:SetWidth(columnWidth)
-            field.text:SetWidth(math.max(50, columnWidth - (field.calculate and 121 or 100)))
+            field.text:SetWidth(math.max(50, columnWidth - ((field.calculate or field.distribution) and 121 or 100)))
         end
         y = y + math.ceil(#group.fields / columns) * ROW_HEIGHT + 9
     end
@@ -1668,7 +1924,10 @@ local function createProfileRow(index)
     row.name:SetWordWrap(false)
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(20, 20)
-    row.icon:SetPoint("LEFT", 29, 0)
+    row.icon:SetPoint("LEFT", 53, 0)
+    row.classIcon = row:CreateTexture(nil, "ARTWORK")
+    row.classIcon:SetSize(20, 20)
+    row.classIcon:SetPoint("LEFT", 29, 0)
     row:SetScript("OnClick", function() selectProfile(row.profileID, false) end)
     row:SetScript("OnEnter", function(self)
         if row.profileName then
@@ -1723,7 +1982,7 @@ local function createUI()
     label(UI.left, "Profiles", 13, { 1, 0.82, 0.35 }):SetPoint("TOPLEFT", 12, -13)
     UI.profileScroll = CreateFrame("ScrollFrame", "ZwykValuesProfilesScroll", UI.left, "UIPanelScrollFrameTemplate")
     UI.profileScroll:SetPoint("TOPLEFT", 9, -38)
-    UI.profileScroll:SetPoint("BOTTOMRIGHT", -30, 215)
+    UI.profileScroll:SetPoint("BOTTOMRIGHT", -30, 145)
     UI.profileContent = CreateFrame("Frame", nil, UI.profileScroll)
     UI.profileContent:SetSize(179, 1)
     UI.profileScroll:SetScrollChild(UI.profileContent)
@@ -1737,7 +1996,7 @@ local function createUI()
     UI.upgrades = panel(UI.left)
     UI.upgrades:SetPoint("BOTTOMLEFT", 8, 46)
     UI.upgrades:SetPoint("BOTTOMRIGHT", -8, 46)
-    UI.upgrades:SetHeight(160)
+    UI.upgrades:SetHeight(87)
     UI.upgradeTitle = label(UI.upgrades, "Upgrade arrows (0)", 12, { 1, 0.82, 0.35 })
     UI.upgradeTitle:SetPoint("TOPLEFT", 9, -10)
     UI.upgradeTitle:SetPoint("TOPRIGHT", -9, -10)
@@ -1777,23 +2036,6 @@ local function createUI()
         GameTooltip:Show()
     end)
     UI.comparison:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    local function upgradeOption(text, y, key, explanation)
-        local control = CreateFrame("CheckButton", nil, UI.upgrades, "UICheckButtonTemplate")
-        control:SetSize(22, 22)
-        control:SetPoint("TOPLEFT", 6, -y)
-        label(control, text, 10, { 0.76, 0.82, 0.9 }):SetPoint("LEFT", control, "RIGHT", 1, 0)
-        control.optionKey, control.default = key, false
-        control:SetScript("OnClick", function(self)
-            local ok, err = FW:SetUpgradeOption(key, self:GetChecked() and true or false)
-            FW:RefreshUI()
-            if not ok then status(err or "Could not update upgrade arrows.", "error") end
-        end)
-        hint(control, text .. " upgrade arrows", explanation .. " Requires at least one profile enabled for arrows. Each location can be enabled independently; changes apply immediately.")
-        return control
-    end
-    UI.upgradeBags = upgradeOption("Item windows", 79, "upgradeBags", "Show an upgrade arrow on item icons in bags, loot, banks, trade and vendor windows, and the auction house.")
-    UI.upgradeRolls = upgradeOption("Loot rolls", 103, "upgradeRolls", "Show an upgrade arrow on the item icon in native loot-roll windows.")
-    UI.upgradeChat = upgradeOption("Chat item links", 127, "upgradeChat", "Show an arrow next to item links in newly received chat messages once item data is loaded. Existing messages keep their original display.")
 
     UI.right = panel(frame)
     UI.right:SetPoint("TOPLEFT", 250, -71)
@@ -1862,6 +2104,24 @@ local function createUI()
     UI.iconNone:SetPoint("CENTER")
     hint(UI.icon, "Choose profile icon", "Choose an optional game icon. Select None to remove it. Changes save immediately and keep unsaved name, color and weights.")
 
+    UI.class = CreateFrame("Button", nil, UI.right)
+    UI.class:SetSize(24, 24)
+    UI.class:SetPoint("LEFT", UI.icon, "RIGHT", 10, 0)
+    UI.class:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
+    UI.class:SetScript("OnClick", function() showClassPicker() end)
+    UI.class.isProfileClass = true
+    UI.classIcon = UI.class:CreateTexture(nil, "ARTWORK")
+    UI.classIcon:SetAllPoints()
+    UI.class:SetScript("OnEnter", function(self)
+        local choice = profileClass(selectedProfile())
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(choice.label, 1, 0.82, 0)
+        GameTooltip:AddLine(string.format("Default Crit split: Melee %.0f%% / Spell %.0f%%.", choice.meleeShare * 100, (1 - choice.meleeShare) * 100), 0.7, 0.8, 0.9, true)
+        GameTooltip:AddLine("Choose a class, specialization or role. Selection suggests its default Crit distribution; Apply weights saves that change. Attribute calculations use your current character's class and level.", 0.9, 0.9, 0.9, true)
+        GameTooltip:Show()
+    end)
+    UI.class:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
     UI.itemFilters = button(UI.right, "Item filters", 100, showItemFilters)
     UI.itemFilters:SetPoint("TOPRIGHT", -15, -98)
     hint(UI.itemFilters, "Item filters for this profile", "Choose weapon types, armor types, and whether to include items restricted to other classes. These settings are separate for each profile and save immediately.")
@@ -1899,29 +2159,18 @@ local function createUI()
     UI.exportWeights:SetPoint("RIGHT", UI.export, "LEFT", -6, 0)
     hint(UI.export, "Export profile", "Exports the saved profile with its name, color, icon, units and item filters. Apply edited weights before exporting.")
     hint(UI.exportWeights, "Export weights", "Exports the saved weights using Sixty Upgrades keys. Name, color, icon, unit and item filter metadata are omitted.")
-    UI.profileControls = { UI.name, UI.rename, UI.active, UI.upgradeProfile, UI.comparison, UI.color, UI.colorButton, UI.colorPicker, UI.icon, UI.itemFilters, UI.apply }
+    UI.profileControls = { UI.name, UI.rename, UI.active, UI.upgradeProfile, UI.comparison, UI.color, UI.colorButton, UI.colorPicker, UI.icon, UI.class, UI.itemFilters, UI.apply }
     buildWeightFields()
 
     local note = label(frame, "Fixed weights ignore caps, procs, sets and rotations.", 10, { 0.66, 0.71, 0.79 })
     note:SetPoint("BOTTOMLEFT", 21, 73)
     note:SetWidth(305)
-    local function option(text, x, key, default)
-        local control = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
-        control:SetSize(24, 24)
-        control:SetPoint("BOTTOMLEFT", x, 65)
-        label(control, text, 10, { 0.76, 0.82, 0.9 }):SetPoint("LEFT", control, "RIGHT", 0, 0)
-        control:SetScript("OnClick", function(self)
-            FW.DB.options = FW.DB.options or {}
-            FW.DB.options[key] = self:GetChecked() and true or false
-            if FW.RefreshTooltips then FW:RefreshTooltips() end
-        end)
-        control.optionKey, control.default = key, default
-        return control
-    end
-    UI.debugUnknown = option("Mark unrecognized stats", 340, "debugUnknownStats", false)
-    UI.comparisons = option("Show upgrade comparisons", 590, "showComparisons", true)
-    hint(UI.debugUnknown, "Unrecognized stat diagnostics", "Adds [ZV ?] next to unrecognized stat lines. Partial-data warnings and the issue log are available even when this option is off.")
-    hint(UI.comparisons, "Item comparisons", "Show the flat score change and percentage upgrade or downgrade for every active tooltip profile, using its selected equipped gear or equipment set.")
+    UI.globalSettings = button(frame, "Global settings", 130, function()
+        closeProfileDialogs()
+        if FW.ShowGlobalSettings then FW:ShowGlobalSettings(frame) end
+    end)
+    UI.globalSettings:SetPoint("BOTTOMRIGHT", -27, 65)
+    hint(UI.globalSettings, "Global settings", "Configure tooltip icons, item comparisons, upgrade-arrow locations and diagnostics for all profiles.")
     UI.status = label(frame, "", 11)
     UI.status:SetPoint("BOTTOMLEFT", 21, 44)
     UI.status:SetPoint("BOTTOMRIGHT", -21, 44)
@@ -1980,7 +2229,8 @@ function FW:RefreshUI()
         row.icon:SetTexture(profile.icon)
         row.icon:SetShown(profile.icon ~= nil)
         row.name:ClearAllPoints()
-        row.name:SetPoint("LEFT", profile.icon and 53 or 29, 0)
+        row.classIcon:SetTexture(profileClass(profile).icon)
+        row.name:SetPoint("LEFT", profile.icon and 77 or 53, 0)
         row.name:SetPoint("RIGHT", -5, 0)
         local color = profile.color or { r = 1, g = 1, b = 1 }
         row.name:SetTextColor(color.r, color.g, color.b)
@@ -2013,12 +2263,7 @@ function FW:RefreshUI()
     UI.cache:SetText(string.format("Cached items: %d  |  Profiles: %d", count, #all))
     local upgradeProfiles = self.GetUpgradeProfiles and self:GetUpgradeProfiles() or {}
     UI.upgradeTitle:SetText("Upgrade arrows (" .. #upgradeProfiles .. ")")
-    local options = self.DB and self.DB.options or {}
-    for _, control in ipairs({ UI.debugUnknown, UI.comparisons, UI.upgradeBags, UI.upgradeRolls, UI.upgradeChat }) do
-        local value = options[control.optionKey]
-        if value == nil then value = control.default end
-        control:SetChecked(value and true or false)
-    end
+    if self.RefreshGlobalSettings then self:RefreshGlobalSettings() end
 end
 
 function FW:ToggleUI()

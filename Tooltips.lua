@@ -169,19 +169,31 @@ local function hasIssues(record, profile)
     return record and ((FW.ItemHasIssues and FW:ItemHasIssues(record, profile)) or record.partial)
 end
 local function profileLabel(profile)
-    local icon = FW.ValidateProfileIcon and FW:ValidateProfileIcon(profile.icon)
-    if icon then return "|T" .. tostring(icon) .. ":14:14:0:0|t " .. profile.name end
-    return profile.name
+    local options, icons = FW.DB.options or {}, {}
+    local function addIcon(value)
+        local icon = FW.ValidateProfileIcon and FW:ValidateProfileIcon(value)
+        if icon then icons[#icons+1] = "|T" .. tostring(icon) .. ":14:14:0:0|t" end
+    end
+    if options.showClassIcon ~= false then
+        local class = FW.GetProfileClass and FW:GetProfileClass(profile.classSpec)
+        if class then addIcon(class.icon) end
+    end
+    if options.showProfileIcon ~= false then addIcon(profile.icon) end
+    icons[#icons+1] = profile.name
+    return table.concat(icons, " ")
 end
 local function activeSignature(profiles)
     local parts = {}
     for _, profile in ipairs(profiles) do
         parts[#parts+1] = table.concat({profile.id, profile.revision or 0,
-            profile.name, profile.color.r, profile.color.g, profile.color.b, profile.icon or ""}, ":")
+            profile.name, profile.color.r, profile.color.g, profile.color.b, profile.icon or "",
+            profile.classSpec or ""}, ":")
     end
     return table.concat(parts, ";") .. ":" .. tostring(FW.equipmentRevision or 0) ..
         ":" .. tostring(FW.DB.options and FW.DB.options.debugUnknownStats) ..
-        ":" .. tostring(FW.DB.options and FW.DB.options.showComparisons)
+        ":" .. tostring(FW.DB.options and FW.DB.options.showComparisons) ..
+        ":" .. tostring(FW.DB.options and FW.DB.options.showProfileIcon) ..
+        ":" .. tostring(FW.DB.options and FW.DB.options.showClassIcon)
 end
 local function comparisonTooltip(tooltip)
     local name = tooltip.GetName and tooltip:GetName() or ""

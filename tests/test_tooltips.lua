@@ -899,4 +899,75 @@ assert(iconTip.lines[2].text=="Icon profile","unset icons keep the original prof
 iconTip:Clear(); profiles[1].icon="|Tinvalid|t"
 postCall(iconTip,{hyperlink=iconTip.link})
 assert(iconTip.lines[2].text=="Icon profile","unvalidated values cannot inject texture markup")
+
+-- Global icon choices are independent. Class icons come only from the known
+-- class/spec catalog, and never decorate Base or Average rows.
+assert(loadfile("ProfileClasses.lua"))("ZwykValues", FW)
+local previousValidate = FW.ValidateProfileIcon
+FW.ValidateProfileIcon=function(self, icon)
+    if icon == "Interface\\Icons\\ClassIcon_Paladin" or icon == "Interface\\Icons\\ClassIcon_Mage" or
+        icon == "Interface\\Icons\\Ability_MeleeDamage" then return icon end
+    return previousValidate(self, icon)
+end
+profiles[1].icon, profiles[1].classSpec = 135920, "PALADIN"
+FW.GetBaseScore=function() return 80, {stats={}} end
+FW.CompareBaseItem=function() return {score=80,record={stats={}},comparisons={}} end
+local classMarkup="|TInterface\\Icons\\ClassIcon_Paladin:14:14:0:0|t"
+local profileMarkup="|T135920:14:14:0:0|t"
+for _, options in ipairs({
+    {profile=true, class=true, label=classMarkup .. " " .. profileMarkup .. " Icon profile"},
+    {profile=true, class=false, label=profileMarkup .. " Icon profile"},
+    {profile=false, class=true, label=classMarkup .. " Icon profile"},
+    {profile=false, class=false, label="Icon profile"},
+}) do
+    FW.DB.options.showProfileIcon, FW.DB.options.showClassIcon = options.profile, options.class
+    local tip=tooltip("IconCombinationTooltip", "item:989")
+    postCall(tip,{hyperlink=tip.link})
+    assert(#tip.lines==3 and tip.lines[2].text==options.label,"both icon settings independently control the main profile label")
+    assert(tip.lines[2].right=="100.00" and tip.lines[3].text=="  Base" and tip.lines[3].right=="80.00", "icon choices preserve Full/Base labels and scores")
+    postCall(tip,{hyperlink=tip.link})
+    assert(#tip.lines==3,"repeated callbacks preserve one profile section for every icon combination")
+end
+FW.DB.options.showProfileIcon, FW.DB.options.showClassIcon = nil, nil
+local defaultIcons=tooltip("DefaultTooltipIcons", "item:990")
+postCall(defaultIcons,{hyperlink=defaultIcons.link})
+assert(defaultIcons.lines[2].text==classMarkup .. " " .. profileMarkup .. " Icon profile", "older saved options show both icons by default")
+defaultIcons:Clear(); profiles[1].classSpec="unknown|Tmalicious|t"
+postCall(defaultIcons,{hyperlink=defaultIcons.link})
+assert(defaultIcons.lines[2].text==profileMarkup .. " Icon profile", "unknown identities cannot supply texture markup")
+defaultIcons:Clear(); profiles[1].classSpec="physical"
+postCall(defaultIcons,{hyperlink=defaultIcons.link})
+assert(defaultIcons.lines[2].text=="|TInterface\\Icons\\Ability_MeleeDamage:14:14:0:0|t " .. profileMarkup .. " Icon profile", "group identities use their catalog icon")
+
+-- Live settings and identity notifications rebuild native content once. The
+-- signature also recognizes these presentation changes without revising scores.
+for _, tip in ipairs(testTooltips) do tip:Hide() end
+profiles[1].classSpec="PALADIN"
+local liveIcons=tooltip("LiveTooltipIcons", "item:991")
+postCall(liveIcons,{hyperlink=liveIcons.link})
+local nativeRefreshes=0
+function liveIcons:RefreshData()
+    nativeRefreshes=nativeRefreshes+1
+    self:Clear(); postCall(self,{hyperlink=self.link})
+end
+local previousSignature, scoreRevision=liveIcons.fwSignature,profiles[1].revision
+FW.DB.options.showClassIcon=false
+FW:RefreshTooltips()
+assert(nativeRefreshes==1 and #liveIcons.lines==3 and liveIcons.lines[2].text==profileMarkup .. " Icon profile", "disabling class icons refreshes once without duplicate sections")
+assert(liveIcons.fwSignature~=previousSignature, "class display participates in the decoration signature")
+previousSignature=liveIcons.fwSignature
+FW.DB.options.showProfileIcon=false
+FW:RefreshTooltips()
+assert(nativeRefreshes==2 and #liveIcons.lines==3 and liveIcons.lines[2].text=="Icon profile", "disabling profile icons refreshes once without duplicate sections")
+assert(liveIcons.fwSignature~=previousSignature, "profile icon display participates in the decoration signature")
+FW.DB.options.showClassIcon, FW.DB.options.showProfileIcon=true,true
+FW:RefreshTooltips()
+previousSignature=liveIcons.fwSignature
+profiles[1].classSpec="MAGE"
+FW:RefreshTooltips()
+assert(nativeRefreshes==4 and #liveIcons.lines==3 and liveIcons.lines[2].text=="|TInterface\\Icons\\ClassIcon_Mage:14:14:0:0|t " .. profileMarkup .. " Icon profile", "class identity changes rebuild one native section")
+assert(liveIcons.fwSignature~=previousSignature and profiles[1].revision==scoreRevision, "class identity changes affect only presentation identity")
+postCall(liveIcons,{hyperlink=liveIcons.link})
+liveIcons:Fire("OnTooltipSetItem")
+assert(#liveIcons.lines==3 and nativeRefreshes==4, "mixed native callbacks keep one section after a live icon refresh")
 print("Tooltip tests passed")
