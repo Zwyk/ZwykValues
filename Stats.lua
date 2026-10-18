@@ -2,7 +2,8 @@ local _, FW = ...
 
 -- Explicit stat keys; legacy combined crit is normalized when weights are imported.
 -- Secondary weights always mean one percentage point (defense uses one skill
--- point). Native ratings remain diagnostic data, never a scoring fallback.
+-- point). The editor can display equivalent per-rating weights; scoring and
+-- calculator inputs remain in these canonical units.
 FW.StatDefinitions = {
     { key = "strength", label = "Strength", group = "Attributes" },
     { key = "agility", label = "Agility", group = "Attributes" },
@@ -55,4 +56,27 @@ FW.StatDefinitions = {
 FW.StatByKey = {}
 for _, definition in ipairs(FW.StatDefinitions) do
     FW.StatByKey[definition.key] = definition
+end
+
+-- WoWSims Forever's level-60 export units. These constants intentionally match
+-- ui/sim/constants/mechanics.ts, rather than TBC/retail level scaling. They
+-- convert WEIGHTS for display/import only, never the player's primary stats.
+local ratingPerPercent = {
+    crit = 14, meleeCrit = 14, spellCrit = 14,
+    hit = 10, haste = 10, expertise = 10,
+    dodge = 12, parry = 15, block = 5, defense = 1,
+}
+
+function FW:GetRatingPerPercent(key)
+    return ratingPerPercent[key]
+end
+
+function FW:WeightToDisplay(key, value, unit)
+    local rate = ratingPerPercent[key]
+    return unit == "rating" and rate and value / rate or value
+end
+
+function FW:WeightFromDisplay(key, value, unit)
+    local rate = ratingPerPercent[key]
+    return unit == "rating" and rate and value * rate or value
 end

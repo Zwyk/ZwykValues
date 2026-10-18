@@ -7,6 +7,7 @@ local refreshItemFilters
 local closeColorPicker
 local closeIconPicker
 local refreshComparisonTarget
+local draftWeights
 local function closeProfileDialogs()
     if not UI then return end
     UI.comparisonSession, UI.calculationSession = nil, nil
@@ -191,13 +192,33 @@ local function previewColor(color)
     UI.colorSwatch:SetColorTexture(color.r, color.g, color.b, 1)
 end
 
-local function updateUnitHelp()
-    UI.unitHelp:SetText("Secondary weights always use 1% (1% = 1); defense uses skill points.")
+local function displayUnit(profile)
+    return profile and profile.secondaryDisplayUnit == "rating" and "rating" or "percent"
+end
+
+-- Keep the canonical value beside its displayed text. Switching units and then
+-- applying an otherwise untouched draft must not round its saved weight.
+local function displayWeight(field, value, unit)
+    local converted = FW:WeightToDisplay(field.key, value, unit)
+    local text = tostring(converted)
+    field.canonicalValue, field.displayText = value, text
+    setWeightText(field.box, text)
+end
+
+local function updateUnitHelp(profile)
+    local unit = displayUnit(profile)
+    UI.unitHelp:SetText(unit == "rating" and "Per 1 rating. Defense: skill." or "Per 1% (1% = 1). Defense: skill.")
+    if UI.unitPercent then
+        UI.unitPercent:SetEnabled(profile ~= nil and unit ~= "percent")
+        UI.unitRating:SetEnabled(profile ~= nil and unit ~= "rating")
+    end
     for _, field in ipairs(UI.fields) do
         if field.secondary then
-            local unit = field.key == "defense" and "skill" or "%"
+            local suffix = field.key == "defense" and "skill" or unit == "rating" and "rating" or "%"
             local name = field.key == "defense" and "Defense" or field.label
-            field.text:SetText(name .. " (" .. unit .. ")")
+            if unit == "rating" and field.key == "meleeCrit" then name = "Melee crit" end
+            if unit == "rating" and field.key == "spellCrit" then name = "Spell crit" end
+            field.text:SetText(name .. " (" .. suffix .. ")")
         end
     end
 end
@@ -221,6 +242,10 @@ local function refreshEditor(force)
     UI.delete:SetEnabled(enabled)
     UI.export:SetEnabled(enabled)
     UI.exportWeights:SetEnabled(enabled)
+    local canonicalDraft
+    if profile and not force and UI.dirtyWeights and UI.displayUnit ~= displayUnit(profile) then
+        canonicalDraft = draftWeights(true)
+    end
     UI.loading = true
     if profile then
         if force or not UI.dirtyName then UI.name:SetText(profile.name or "") end
@@ -236,9 +261,12 @@ local function refreshEditor(force)
             setEnabled(field.box, true)
             if field.calculate then setEnabled(field.calculate, true) end
             if force or not UI.dirtyWeights then
-                setWeightText(field.box, tostring((profile.weights or {})[field.key] or 0))
+                displayWeight(field, (profile.weights or {})[field.key] or 0, displayUnit(profile))
+            elseif canonicalDraft then
+                displayWeight(field, canonicalDraft[field.key], displayUnit(profile))
             end
         end
+        UI.displayUnit = displayUnit(profile)
         UI.editorTitle:SetText("Weights for " .. (profile.name or "profile"))
     else
         UI.name:SetText("")
@@ -250,10 +278,11 @@ local function refreshEditor(force)
         UI.iconNone:Show()
         updateUnitHelp(nil)
         for _, field in ipairs(UI.fields) do
-            setWeightText(field.box, "0")
+            displayWeight(field, 0, "percent")
             setEnabled(field.box, false)
             if field.calculate then setEnabled(field.calculate, false) end
         end
+        UI.displayUnit = "percent"
         UI.editorTitle:SetText("Create a profile to set weights")
     end
     if force then
@@ -286,7 +315,7 @@ local function commit(changes, clearDraft, success)
     return true
 end
 
-local function draftWeights(quiet)
+draftWeights = function(quiet)
     local weights = {}
     for _, field in ipairs(UI.fields) do
         local text = trim(field.box:GetText())
@@ -299,9 +328,29 @@ local function draftWeights(quiet)
             end
             return nil
         end
-        weights[field.key] = value
+        weights[field.key] = text == field.displayText and field.canonicalValue or
+            FW:WeightFromDisplay(field.key, value, UI.displayUnit)
     end
     return weights
+end
+
+local function changeDisplayUnit(unit)
+    local profile = selectedProfile()
+    if not profile or unit == UI.displayUnit then return end
+    local weights = draftWeights()
+    if not weights then return end
+    -- Update only the presentation preference; draft weights and calculation
+    -- choices remain pending until Apply weights is clicked.
+    UI.committing = true
+    local ok, err = FW:UpdateProfile(profile.id, { secondaryDisplayUnit = unit })
+    UI.committing = false
+    if not ok then status(err or "Could not change display units.", "error") return end
+    UI.loading = true
+    for _, field in ipairs(UI.fields) do displayWeight(field, weights[field.key], unit) end
+    UI.displayUnit = unit
+    UI.loading = false
+    FW:RefreshUI()
+    status("Display units changed. The same weights and item scores are preserved.")
 end
 
 local function applyWeights()
@@ -438,7 +487,7 @@ end
 local function useCalculatedWeight(field, result, options, params, rankChanges, restoreCurrent)
     if not selectedProfile() or not result.available or not finite(result.value) then return end
     UI.loading = true
-    setWeightText(field.box, string.format("%.8g", result.value))
+    displayWeight(field, result.value, UI.displayUnit)
     UI.loading = false
     if options then
         local draft = {}
@@ -496,6 +545,9 @@ local function calculationSections(field, result, withFooter)
         end
     end
     line(result.contextText, "context")
+    if UI.displayUnit == "rating" then
+        line("Secondary formula inputs use weights per 1%; defense uses skill.", "context")
+    end
     local structured = result.formula or result.contributions or result.modifierLines
     if structured then
         if result.formula and result.formula ~= "" then heading("Formula") line(result.formula) end
@@ -518,7 +570,9 @@ local function calculationSections(field, result, withFooter)
     end
     space()
     if result.available and finite(result.value) then
-        line("Calculated weight", "result", calculationNumber(result.value))
+        local rating = field.secondary and field.key ~= "defense" and UI.displayUnit == "rating"
+        line(rating and "Calculated weight per 1 rating" or "Calculated weight", "result",
+            calculationNumber(FW:WeightToDisplay(field.key, result.value, UI.displayUnit)))
     else
         line(result.reason or "Calculation unavailable.", "warning")
     end
@@ -1213,7 +1267,7 @@ end
 local function createJSONDialog()
     local dialog = panel(UI.frame)
     UI.dialog = dialog
-    dialog:SetSize(740, 470)
+    dialog:SetSize(740, 500)
     dialog:SetPoint("CENTER")
     dialog:SetFrameStrata("DIALOG")
     dialog:SetFrameLevel(UI.frame:GetFrameLevel() + 20)
@@ -1230,8 +1284,21 @@ local function createJSONDialog()
     dialog.nameLabel:SetPoint("TOPLEFT", 18, -86)
     dialog.name = editBox(dialog, 260)
     dialog.name:SetPoint("TOPLEFT", 112, -79)
+    hint(dialog.name, "Optional profile name", "Leave blank to keep the exported profile or scale name. Enter a name to override it.")
+    dialog.pawnSharedCrit = CreateFrame("CheckButton", nil, dialog, "UICheckButtonTemplate")
+    dialog.pawnSharedCrit:SetSize(24, 24)
+    dialog.pawnSharedCrit:SetPoint("TOPLEFT", 391, -79)
+    dialog.pawnSharedCrit:SetChecked(true)
+    label(dialog.pawnSharedCrit, "Shared Pawn crit (WoWSims Forever)", 10, { 0.85, 0.89, 0.94 }):SetPoint("LEFT", dialog.pawnSharedCrit, "RIGHT", 1, 0)
+    hint(dialog.pawnSharedCrit, "Pawn critical-strike interpretation", "WoWSims Forever exports CritRating as combined melee and spell critical strike. Disable for Classic Pawn scales where CritRating is melee and SpellCritRating is separate. This option has no effect on JSON or Sixty Upgrades links.")
+    dialog.pawnPercent = CreateFrame("CheckButton", nil, dialog, "UICheckButtonTemplate")
+    dialog.pawnPercent:SetSize(24, 24)
+    dialog.pawnPercent:SetPoint("TOPLEFT", 18, -108)
+    dialog.pawnPercent:SetChecked(false)
+    label(dialog.pawnPercent, "Pawn values already use percentages (Classic)", 10, { 0.85, 0.89, 0.94 }):SetPoint("LEFT", dialog.pawnPercent, "RIGHT", 1, 0)
+    hint(dialog.pawnPercent, "Pawn secondary-stat units", "Leave unchecked for WoWSims Forever and Pawn rating exports. Enable for Classic Pawn scales whose secondary values are already per 1%. Defense remains in skill points. This option has no effect on JSON or Sixty Upgrades links.")
     local inset = panel(dialog)
-    inset:SetPoint("TOPLEFT", 16, -112)
+    inset:SetPoint("TOPLEFT", 16, -142)
     inset:SetPoint("BOTTOMRIGHT", -16, 66)
     dialog.scroll = CreateFrame("ScrollFrame", "ZwykValuesJSONScroll", inset, "UIPanelScrollFrameTemplate")
     dialog.scroll:SetPoint("TOPLEFT", 8, -8)
@@ -1273,10 +1340,13 @@ local function createJSONDialog()
     dialog.close:SetPoint("BOTTOMRIGHT", -18, 12)
     dialog.import = button(dialog, "Import profile", 120, function()
         UI.committing = true
-        local profile, err, warnings = FW:ImportProfile(dialog.text:GetText(), trim(dialog.name:GetText()))
+        local name = trim(dialog.name:GetText())
+        local profile, err, warnings = FW:ImportProfile(dialog.text:GetText(), name ~= "" and name or nil,
+            { pawnCritMode = dialog.pawnSharedCrit:GetChecked() and "shared" or "separate",
+                pawnUnit = dialog.pawnPercent:GetChecked() and "percent" or "rating" })
         UI.committing = false
         if not profile then
-            dialog.message:SetText(err or "Could not import this JSON.")
+            dialog.message:SetText(err or "Could not import this profile.")
             return
         end
         dialog:Hide()
@@ -1312,10 +1382,12 @@ local function showJSON(mode)
     dialog.message:SetText("")
     if mode == "import" then
         dialog.title:SetText("Import a weight profile")
-        dialog.help:SetText("Paste a Sixty Upgrades weights object, a ZwykValues profile, or a legacy ZwykPoints/ForeverWeights profile. Secondary weights always use percentage points; defense uses skill points.")
+        dialog.help:SetText("Paste a WoWSims Forever Sixty Upgrades EP link, Pawn scale, or JSON. Rating weights convert to %. Blank name keeps the export's name. Imported weights are not recalculated.")
         dialog.nameLabel:Show()
         dialog.name:Show()
-        dialog.name:SetText(uniqueName("Imported profile"))
+        dialog.name:SetText("")
+        dialog.pawnSharedCrit:Show()
+        dialog.pawnPercent:Show()
         dialog.import:Show()
         dialog.text:SetText("")
     else
@@ -1329,6 +1401,8 @@ local function showJSON(mode)
             or "Includes all weights, name, color, icon, stat units and item filters. Press Ctrl+C to copy this profile, then import it on another character or account.")
         dialog.nameLabel:Hide()
         dialog.name:Hide()
+        dialog.pawnSharedCrit:Hide()
+        dialog.pawnPercent:Hide()
         dialog.import:Hide()
         dialog.text:SetText(text)
     end
@@ -1499,6 +1573,20 @@ local function buildWeightFields()
         end)
         field.box:SetScript("OnEnterPressed", function(self) self:ClearFocus() applyWeights() end)
         hint(field.box, field.label, (statHints[field.key] or "Weight per 1 unit of this stat. Zero ignores it. Negative and decimal weights are allowed.") .. "\nImport/export key: " .. field.key)
+        if field.secondary then
+            field.box:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText(field.label, 1, 0.82, 0)
+                if field.key == "defense" then
+                    GameTooltip:AddLine("Weight per 1 defense skill point in both display modes.", 0.9, 0.9, 0.9, true)
+                else
+                    GameTooltip:AddLine(UI.displayUnit == "rating" and "Weight per 1 rating." or "Weight per 1 percentage point (1% = 1).", 0.9, 0.9, 0.9, true)
+                    GameTooltip:AddLine("WoWSims Forever conversion: " .. tostring(FW:GetRatingPerPercent(field.key)) .. " rating = 1%. Display conversion keeps item scores unchanged.", 0.7, 0.8, 0.9, true)
+                end
+                GameTooltip:AddLine("Import/export key: " .. field.key, 0.9, 0.9, 0.9, true)
+                GameTooltip:Show()
+            end)
+        end
         installCalculationButton(field)
         UI.fields[#UI.fields + 1] = field
         group.fields[#group.fields + 1] = field
@@ -1777,8 +1865,15 @@ local function createUI()
     UI.itemFilters = button(UI.right, "Item filters", 100, showItemFilters)
     UI.itemFilters:SetPoint("TOPRIGHT", -15, -98)
     hint(UI.itemFilters, "Item filters for this profile", "Choose weapon types, armor types, and whether to include items restricted to other classes. These settings are separate for each profile and save immediately.")
+    UI.unitPercent = button(UI.right, "Percent", 70, function() changeDisplayUnit("percent") end)
+    UI.unitPercent:SetPoint("TOPLEFT", 15, -98)
+    UI.unitRating = button(UI.right, "Rating", 63, function() changeDisplayUnit("rating") end)
+    UI.unitRating:SetPoint("LEFT", UI.unitPercent, "RIGHT", 6, 0)
+    local unitExplanation = "Change how secondary weights are shown and entered, preserving their value and item scores. WoWSims Forever conversions: 14 crit rating = 1%; 10 hit, haste or expertise rating = 1%; 12 dodge, 15 parry or 5 block rating = 1%. Defense stays in skill points. These are WoWSims Forever's fixed conversions, not level-scaled native-client rates. Unsaved edits stay pending."
+    hint(UI.unitPercent, "Show weights per 1%", unitExplanation)
+    hint(UI.unitRating, "Show weights per 1 rating", unitExplanation)
     UI.unitHelp = label(UI.right, "", 10, { 0.65, 0.74, 0.85 })
-    UI.unitHelp:SetPoint("TOPLEFT", 15, -103)
+    UI.unitHelp:SetPoint("TOPLEFT", 164, -103)
     UI.unitHelp:SetPoint("TOPRIGHT", -130, -103)
     UI.unitHelp:SetHeight(26)
     UI.unitHelp:SetJustifyV("TOP")

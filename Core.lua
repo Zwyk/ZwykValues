@@ -412,6 +412,7 @@ function FW:Initialize()
         profile.revision = finite(profile.revision) and math.max(1, math.floor(profile.revision)) or 1
         if profile.secondaryUnit == "rating" or migrateCrit then profile.revision = profile.revision + 1 end
         profile.secondaryUnit = "percent"
+        profile.secondaryDisplayUnit = profile.secondaryDisplayUnit == "rating" and "rating" or "percent"
         normalized[#normalized + 1], seen[id] = id, true
     end
     for _, id in ipairs(db.profileOrder) do restore(id, db.profiles[id]) end
@@ -531,7 +532,7 @@ function FW:CreateProfile(name, weights)
     local profile = {
         id = id, name = checkedName, active = true, upgradeEnabled = false,
         color = { r = defaultColor.r, g = defaultColor.g, b = defaultColor.b },
-        weights = checkedWeights, revision = 1, secondaryUnit = "percent", itemFilters = cloneItemFilters(),
+        weights = checkedWeights, revision = 1, secondaryUnit = "percent", secondaryDisplayUnit = "percent", itemFilters = cloneItemFilters(),
         comparisonTarget = {mode="equipped"},
     }
     db.profiles[id] = profile
@@ -561,7 +562,7 @@ function FW:UpdateProfile(id, changes)
     if not profile then return nil, "Profile not found." end
     if not plainObject(changes) then return nil, "Profile changes must be a table." end
     local allowed = { name = true, active = true, color = true, icon = true, weights = true, secondaryUnit = true,
-        itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true }
+        secondaryDisplayUnit = true, itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true }
     for key in pairs(changes) do if not allowed[key] then return nil, "Unknown profile field '" .. key .. "'." end end
     local replacement, errorMessage = { secondaryUnit = "percent" }
     if changes.name ~= nil then
@@ -595,6 +596,12 @@ function FW:UpdateProfile(id, changes)
     if changes.secondaryUnit ~= nil then
         replacement.secondaryUnit, errorMessage = validUnit(changes.secondaryUnit)
         if not replacement.secondaryUnit then return nil, errorMessage end
+    end
+    if changes.secondaryDisplayUnit ~= nil then
+        if changes.secondaryDisplayUnit ~= "percent" and changes.secondaryDisplayUnit ~= "rating" then
+            return nil, "Secondary display unit must be 'percent' or 'rating'."
+        end
+        replacement.secondaryDisplayUnit = changes.secondaryDisplayUnit
     end
     if changes.weights ~= nil then
         local checked
@@ -662,21 +669,25 @@ function FW:CopyProfile(id)
     profile.comparisonTarget = copySavedTable(original.comparisonTarget)
     profile.calculationOptions = copySavedTable(original.calculationOptions)
     profile.secondaryUnit = "percent"
+    profile.secondaryDisplayUnit = original.secondaryDisplayUnit or "percent"
     profile.itemFilters = cloneItemFilters(original.itemFilters)
     self:NotifyChanged()
     return profile
 end
 
-function FW:ImportProfile(source, fallbackName)
+function FW:ImportProfile(source, fallbackName, importOptions)
     self:Initialize()
-    local decoded, errorMessage = self.JSON.Decode(source)
+    local decoded, errorMessage, warnings
+    if self.ParseExternalWeights then decoded, errorMessage, warnings = self:ParseExternalWeights(source, importOptions) end
+    if errorMessage then return nil, errorMessage end
+    if decoded == nil then decoded, errorMessage = self.JSON.Decode(source) end
     if decoded == nil then return nil, errorMessage end
     if not plainObject(decoded) then return nil, "Import must be a weight object or a ZwykValues profile object." end
-    local weights, name, color, icon, unit, filters, upgradeEnabled, comparisonTarget, calculationOptions
-    local warnings = {}
+    local weights, name, color, icon, unit, filters, upgradeEnabled, comparisonTarget, calculationOptions, displayUnit
+    warnings = warnings or {}
     if decoded.weights ~= nil or decoded.format ~= nil then
         local allowed = { format = true, version = true, name = true, color = true, icon = true, secondaryUnit = true,
-            weights = true, itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true }
+            secondaryDisplayUnit = true, weights = true, itemFilters = true, upgradeEnabled = true, comparisonTarget = true, calculationOptions = true }
         for key in pairs(decoded) do if not allowed[key] then return nil, "Unknown profile field '" .. key .. "'." end end
         if decoded.format ~= "ZwykValues" and decoded.format ~= "ZwykPoints" and decoded.format ~= "ForeverWeights" then
             return nil, "Profile format must be 'ZwykValues', 'ZwykPoints' or 'ForeverWeights'."
@@ -684,7 +695,7 @@ function FW:ImportProfile(source, fallbackName)
         if decoded.version ~= 1 then return nil, "Unsupported profile version (expected 1)." end
         weights, errorMessage = validWeights(decoded.weights)
         if not weights then return nil, errorMessage end
-        name, errorMessage = validName(decoded.name or fallbackName or "Imported profile")
+        name, errorMessage = validName(fallbackName or decoded.name or "Imported profile")
         if not name then return nil, errorMessage end
         color, errorMessage = validColor(decoded.color or defaultColor)
         if not color then return nil, errorMessage end
@@ -706,6 +717,10 @@ function FW:ImportProfile(source, fallbackName)
         end
         unit, errorMessage = validUnit(decoded.secondaryUnit or "percent")
         if not unit then return nil, errorMessage end
+        displayUnit = decoded.secondaryDisplayUnit or "percent"
+        if displayUnit ~= "percent" and displayUnit ~= "rating" then
+            return nil, "Secondary display unit must be 'percent' or 'rating'."
+        end
         if decoded.secondaryUnit == "rating" then
             warnings[#warnings + 1] = decoded.weights.crit ~= nil
                 and "Legacy rating profile imported in percentage points. Defense uses defense skill points; combined critical strike migration is described separately."
@@ -726,12 +741,13 @@ function FW:ImportProfile(source, fallbackName)
     end
     local sourceWeights = decoded.weights or decoded
     if sourceWeights.crit ~= nil then
-        warnings[#warnings + 1] = "Legacy critical strike weight split evenly between meleeCrit and spellCrit; generic item crit keeps its previous total value."
+        table.insert(warnings, 1, "Combined Crit split evenly between Melee and Spell Crit; review both weights. This preserves generic crit's total value.")
     end
     local profile
     profile, errorMessage = self:CreateProfile(name, weights)
     if not profile then return nil, errorMessage end
     profile.color, profile.icon, profile.secondaryUnit = color, icon, unit
+    profile.secondaryDisplayUnit = displayUnit or "percent"
     profile.upgradeEnabled = upgradeEnabled == true
     if comparisonTarget then profile.comparisonTarget = comparisonTarget end
     profile.calculationOptions = calculationOptions
@@ -753,7 +769,8 @@ function FW:ExportProfile(id, bare)
         upgradeEnabled = profile.upgradeEnabled == true,
         comparisonTarget = copySavedTable(profile.comparisonTarget or {mode="equipped"}),
         calculationOptions = copySavedTable(profile.calculationOptions),
-        secondaryUnit = "percent", weights = weights, itemFilters = cloneItemFilters(profile.itemFilters),
+        secondaryUnit = "percent", secondaryDisplayUnit = profile.secondaryDisplayUnit or "percent",
+        weights = weights, itemFilters = cloneItemFilters(profile.itemFilters),
     })
 end
 

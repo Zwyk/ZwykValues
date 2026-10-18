@@ -1,8 +1,8 @@
-# ZwykValues 0.1.29
+# ZwykValues 0.1.30
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
-Version 0.1.29 prioritizes the leading digits in weight fields and adds estimated out-of-combat health regeneration to Spirit calculations. Long values align left and return to their beginning after loading, calculation or finishing an edit, so the sign and decimal point remain visible. Values are not shortened to fit the field.
+Version 0.1.30 restores **Percent / Rating** display with converted weights and imports WoWSims Forever's **60U EP links** and **Pawn EP strings**. Switching display units preserves item scores and unsaved edits. Existing profile weights retain their values.
 
 ## Installation
 
@@ -47,13 +47,17 @@ Copies and full profile exports preserve these choices. Bare weights JSON and ol
 
 ## Stat units and JSON
 
-**Import** accepts a bare JSON object of stat weights, including legacy Sixty Upgrades keys. Missing recognized keys become zero. Unknown keys and invalid numeric values are rejected with a message so typos cannot silently change a profile. The two crit weights use `meleeCrit` and `spellCrit`.
+**Import** accepts a WoWSims Forever **60U EP export link**, a **Pawn scale string**, or a bare JSON object of stat weights, including legacy Sixty Upgrades keys. Full ZwykValues/ZwykPoints/ForeverWeights profile JSON also remains accepted. Leave the optional name blank to use the exported profile name. Missing recognized keys become zero. Unsupported nonzero export fields and invalid numeric values are rejected with a message so they cannot silently change a profile. The two crit weights use `meleeCrit` and `spellCrit`.
+
+60U Forever links already contain percentage weights. Pawn rating weights are converted to percentage weights on import and initially display as Rating. With **Shared Pawn crit (WoWSims Forever)** checked, `CritRating` is a combined weight, split evenly between Melee and Spell Crit. Disable it for Classic Pawn scales where `CritRating` is physical crit and `SpellCritRating` is separate. Enable **Pawn values already use percentages (Classic)** for Classic scales whose secondary weights are already per 1%, despite their Rating-named keys; leave it disabled for WoWSims Forever. WoWSims exports do not preserve the actual melee/spell split; review that balance after import. Imported weights already include their modeled primary-stat value and are never automatically recalculated through the gear buttons.
+
+Both WoWSims exporters round to three decimals, so equivalent exports can differ slightly: `CritRating=0.971` converts to **13.594 per 1%**, while the supplied 60U example contains **13.600**. WoWSims also merges melee and ranged AP into one export key and omits some weights, such as channel-specific pseudo stats; imports cannot restore information absent from the export. Prefer 60U for the broader set of supported export fields.
 
 Old profiles and imports with only the legacy `crit` key split it evenly: `crit: 10` becomes `meleeCrit: 5` and `spellCrit: 5`. This preserves the total value of generic crit; the old single value cannot identify your intended melee/spell balance, so review the two weights for your build. Migration runs once, retains no hidden third Crit weight, and clears obsolete score/item caches. Explicit new values remain unchanged on reload. Inputs mixing legacy `crit` with either new crit key are rejected; use the explicit pair when choosing a new balance. Full and bare exports contain the two new keys.
 
-**Export weights** produces the bare stat object. **Export profile** also preserves the profile name, color, icon, item filters, upgrade activation, comparison target, calculator ratios and manual talent ranks. These metadata are lost when exporting only bare weights.
+**Export weights** produces the bare stat object in percentage/skill units, regardless of the selected display. **Export profile** also preserves the profile name, color, icon, display preference, item filters, upgrade activation, comparison target, calculator ratios and manual talent ranks. These metadata are lost when exporting only bare weights.
 
-Secondary weights always use percentages; there is no rating mode:
+Choose **Percent** or **Rating** independently for each profile. This changes the displayed secondary weights using WoWSims Forever's export conversions; it leaves the canonical weights, calculations and scores unchanged. The unit table below describes the canonical JSON/scoring units:
 
 | Key or group | Unit |
 | --- | --- |
@@ -68,7 +72,18 @@ Secondary weights always use percentages; there is no rating mode:
 
 Melee/ranged/spell hit aliases remain merged. Crit is separated: generic critical-strike effects add their percentage to both Melee and Spell Crit; spell-only effects add only Spell Crit, and melee/ranged/attack-only effects add only Melee Crit. The Melee label therefore includes ranged attacks. Generic and scoped tooltip effects add together, even when their amounts match. Within the attack channel, generic and all-attack bonuses are added to the larger of the separate melee/ranged totals: a matching 1% melee and 1% ranged bonus counts as one 1% attack bonus. Duplicate native API aliases are counted once within each channel. The reader uses explicit tooltip percentages and keeps native API ratings separately for diagnostics. It does not apply an assumed rating conversion. If a needed percentage is unavailable, the item still shows the subtotal from known values, accompanied by a partial-data warning. A readable enchant cannot hide an unreadable base bonus, and an explicit rating effect cannot be completed by another effect's known percentage. Unavailable amounts contribute zero to that subtotal; an actually absent stat also contributes zero. Check the diagnostics before trusting a partial comparison.
 
-The editor labels each secondary weight with **%**, or **skill** for defense. At Melee Crit weight 4 and Spell Crit weight 6, a generic 0.5% gives 5 points, a melee-only 0.5% gives 2, and a spell-only 0.5% gives 3. For Manascale Treads, 157 armor at 0.05, 7 Strength at 0.2 and 7 Intellect at 0.3 contribute 11.35, giving **16.35** with its generic crit chance at those weights. Version 0.1.18 switches saved rating profiles and imported legacy profiles to percentages, keeping their numeric weights at that upgrade and recalculating old totals. Full exports retain `secondaryUnit: "percent"` for compatibility.
+The editor labels each secondary weight with **%** or **rating**, with **skill** for defense in Percent display. At Melee Crit weight 4 and Spell Crit weight 6 per percent, a generic 0.5% gives 5 points, a melee-only 0.5% gives 2, and a spell-only 0.5% gives 3. In Rating display the two weights become `4/14` and `6/14`; the total stays 5. For Manascale Treads, 157 armor at 0.05, 7 Strength at 0.2 and 7 Intellect at 0.3 contribute 11.35, giving **16.35** with its generic crit chance at those weights. The pre-0.1.18 legacy-rating migration remains unchanged. Full exports retain `secondaryUnit: "percent"` for canonical weights and add `secondaryDisplayUnit` for the display preference.
+
+| Secondary stat | Rating per 1 percentage point |
+| --- | ---: |
+| Melee / Spell Crit | 14 |
+| Hit / Haste / Expertise | 10 |
+| Dodge | 12 |
+| Parry | 15 |
+| Block | 5 |
+| Defense | 1 per defense skill point |
+
+These factors match [WoWSims Forever's mechanics constants](https://github.com/wowsims/forever/blob/master/ui/sim/constants/mechanics.ts), [60U exporter](https://github.com/wowsims/forever/blob/master/ui/features/import-export/exporters/sixty_upgrades_ep.ts) and [Pawn exporter](https://github.com/wowsims/forever/blob/master/ui/features/import-export/exporters/pawn_ep.ts). They describe its level-60 export units; they do not assume native rating scaling for lower-level characters or replace the class/level conversions used by primary-stat calculators.
 
 Static wording such as `chance to critically hit with spells` counts as Spell Crit and does not add Melee Crit or hit chance. Previously parsed item records refresh automatically.
 
@@ -215,6 +230,8 @@ Run the included tests from the addon directory with a Lua interpreter, for exam
 
 ```sh
 lua tests/test_core.lua
+lua tests/test_display_units.lua
+lua tests/test_external_imports.lua
 lua tests/test_derived_weights.lua
 lua tests/test_calculation_pipeline.lua
 lua tests/test_equipment_sets.lua
@@ -244,6 +261,7 @@ lua tests/test_hover_performance.lua
 
 - `JSON.lua`: strict JSON reader/writer; no executable imports.
 - `Stats.lua`: stat schema and native API mappings.
+- `Imports.lua`: non-executable 60U Forever EP link and Pawn scale parsing.
 - `Core.lua`: profile management, import/export, scoring, and score-cache invalidation.
 - `Items.lua`: item variants, client data loading, normalization, static tooltip parsing and timed on-use stat buffs.
 - `DerivedWeights.lua`: on-demand class/level weight calculations and regeneration assumptions.
