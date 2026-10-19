@@ -52,11 +52,11 @@ reset("HUNTER")
 close(calculate("strength",{attackPower=0.1,blockValue=10,rangedAttackPower=10}).value,0.1,"Hunter Strength must not gain ranged AP or shield block")
 reset("SHAMAN")
 close(calculate("strength",{attackPower=0.1,blockValue=2}).value,0.3)
-has(calculate("strength",{blockValue=2}).lines,"Vanilla fallback: 20 Strength")
+has(calculate("strength",{blockValue=2}).lines,"WoWSims Forever level 60: 20 Strength")
 
 reset("ROGUE",60)
 close(calculate("agility",{attackPower=0.1,rangedAttackPower=0.2,armorBonus=0.05,meleeCrit=10,dodge=2}).value,0.883)
-has(calculate("agility",{meleeCrit=10}).lines,"Vanilla fallback")
+has(calculate("agility",{meleeCrit=10}).lines,"WoWSims Forever level 60")
 reset("PALADIN",20)
 close(calculate("agility",{armorBonus=0.05,meleeCrit=10,dodge=2}).value,1.5748)
 playerLevel=60
@@ -125,11 +125,24 @@ close(calculate("spirit",{mp5=10},{castingShare=1,whileCastingRegen=0}).value,0)
 close(calculate("spirit",{mp5=10},{castingShare=1,whileCastingRegen=0.3}).value,1.875)
 close(calculate("spirit",{mp5=-2},{castingShare=0}).value,-1.25,"Negative source weights are valid")
 stats[5]=49
-close(calculate("spirit",{mp5=1},{castingShare=0}).value,1.25)
+local lowSpirit60=calculate("spirit",{mp5=1},{castingShare=0})
+close(lowSpirit60.value,0.625,"Level60 mana regeneration has no50-Spirit breakpoint")
+has(lowSpirit60.provenance,"WoWSims Forever level 60")
+has(lowSpirit60.lines,"flat 0.625 MP5 per Spirit")
 stats[5]=50
-close(calculate("spirit",{mp5=1},{castingShare=0}).value,0.625,"Point beyond 50 uses next-point rate")
+close(calculate("spirit",{mp5=1},{castingShare=0}).value,0.625,"Level60 mana rate is unchanged at50 Spirit")
 stats[5]=49.5
-close(calculate("spirit",{mp5=1},{castingShare=0}).value,0.9375,"Spirit point crossing 50 uses both slopes")
+close(calculate("spirit",{mp5=1},{castingShare=0}).value,0.625,"Level60 fractional Spirit interval uses the flat mana coefficient")
+playerLevel=59
+local crossingSpirit59=calculate("spirit",{mp5=1},{castingShare=0})
+close(crossingSpirit59.value,0.9375,"Unverified lower levels retain the two-slope mana fallback")
+has(crossingSpirit59.provenance,"Classic/RatingBuster mana fallback")
+has(crossingSpirit59.lines,"breakpoint 50 Spirit")
+stats[5]=49
+close(calculate("spirit",{mp5=1},{castingShare=0}).value,1.25,"Lower-level point ending at50 retains the low-side rate")
+stats[5]=50
+close(calculate("spirit",{mp5=1},{castingShare=0}).value,0.625,"Lower-level point beginning at50 retains the high-side rate")
+playerLevel=60
 stats[5]=100
 close(calculate("mp5",{spirit=1},{combatShare=0,castingShare=1,whileCastingRegen=0}).value,1.6)
 close(calculate("mp5",{spirit=1},{combatShare=1,castingShare=1,whileCastingRegen=0.3}).value,1/0.1875)
@@ -341,7 +354,7 @@ stats[3]=19
 close(calculate("stamina",{health=1},bonuses).value,1+0.144*10,"Sacred Duty multiplies with Kings once across threshold")
 stats[5]=49.5
 local spiritBonus=calculate("spirit",{mp5=2},{kings=true,castingShare=0}).value
-close(spiritBonus,2,"Kings Spirit interval spans both sides of50")
+close(spiritBonus,.625*1.1*2,"Kings scales the flat level60 Spirit mana coefficient once")
 close(calculate("mp5",{spirit=spiritBonus},{kings=true,combatShare=0,castingShare=0}).value,2,"MP5 inverse uses raw Spirit bonus interval")
 local savedOptions=FW:GetDerivedWeightDefaults({calculationOptions={kings=true,useTalents=false}})
 equal(savedOptions.kings,true); equal(savedOptions.useTalents,false)
@@ -707,7 +720,7 @@ stats[5]=49.5
 local breakpointHealth={combatShare=0,castingShare=1,whileCastingRegen=0,kings=true}
 local crossingHealth=calculate("spirit",{mp5=2,hp5=3},breakpointHealth)
 close(contribution(crossingHealth,"hp5").rate,(.5*.194+.6*.094)*5,"Kings integrates both sides of the50-Spirit health breakpoint once")
-close(crossingHealth.value,(.5*1.25+.6*.625)*2+(.5*.194+.6*.094)*5*3)
+close(crossingHealth.value,1.1*.625*2+(.5*.194+.6*.094)*5*3,"Level60 mana stays flat while the historical HP5 estimate crosses50")
 close(calculate("mp5",{spirit=crossingHealth.value,hp5=3},breakpointHealth).value,2)
 stats[5]=50
 close(calculate("spirit",{hp5=1},outside).value,.094*5,"The next point at50 uses the upper-side health rate")
@@ -725,7 +738,7 @@ stats[5]=49.5
 local livingHealth=calculate("spirit",{mp5=2,hp5=3},breakpointHealth)
 local livingIncrement=1.1*1.15
 local livingHP5=(.5*.112+(livingIncrement-.5)*.0476)*5
-local livingMana=.5*1.25+(livingIncrement-.5)*.625
+local livingMana=livingIncrement*.625
 close(contribution(livingHealth,"hp5").rate,livingHP5,"Living Spirit and Kings multiply the raw interval once")
 close(livingHealth.value,livingMana*2+livingHP5*3)
 close(calculate("mp5",{spirit=livingHealth.value,hp5=3},breakpointHealth).value,2)
@@ -734,7 +747,7 @@ stats[5]=49
 local unsupportedHealth=FW:GetDerivedWeightOptions("spirit",{mp5=2,hp5=1},outside)
 equal(unsupportedHealth.available,false,"Rows marked No data never become automatic coefficients")
 check(unsupportedHealth.reason:find("out-of-combat Health per 5 seconds estimate is unavailable",1,true))
-close(calculate("spirit",{mp5=2,hp5=0},outside).value,1.25*2,"Missing health coefficient does not block a zero HP5 weight")
+close(calculate("spirit",{mp5=2,hp5=0},outside).value,.625*2,"Missing health coefficient does not block a zero HP5 weight")
 check(calculate("spirit",{mp5=2,hp5=1},{combatShare=1}).available,"Missing health coefficient is irrelevant with no out-of-combat time")
 equal(FW:GetDerivedWeightOptions("mp5",{spirit=3,hp5=1},outside).available,false,"Inverse also requires a nonzero weighted HP5 share to be known")
 stats[5]=100

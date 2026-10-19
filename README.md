@@ -1,8 +1,8 @@
-# ZwykValues 0.1.31
+# ZwykValues 0.1.32
 
 A standalone stat-weight addon written from scratch for WoW Forever. No Pawn code, Pawn dependency, third-party libraries, or online item database is required.
 
-Version 0.1.31 adds a class/spec icon, one combined Crit input with an advanced Melee/Spell distribution control, and a **Global settings** window. Existing channel weights remain intact. Percent/Rating conversion and WoWSims/Pawn imports continue to work with the combined input.
+Version 0.1.32 audits the weight calculators against WoWSims Forever's game-data-derived level-60 coefficients. Crit/dodge values already matched for every class and are now identified as confirmed against that source. Level-60 Spirit mana regeneration now uses its flat 0.625 MP5 per Spirit, including below 50 Spirit. Existing profile weights remain unchanged until you recalculate and apply them.
 
 ## Installation
 
@@ -142,9 +142,33 @@ Weapon DPS also calculates from attack power: the native autoattack conversion i
 
 Base Armor can calculate from the Dodge weight using the requested assumption that one percentage point of Dodge has the same value as one percentage point of physical damage reduction from Armor. It asks the native Forever mitigation API for the gain from the next effective Armor point at your current effective Armor against the chosen attacker level. The Armor calculation dialog offers **player level +0** and **player level +3**, defaulting to **+3**. The offset follows your effective player level, and the tooltip shows the resulting attacker level. Choosing a level updates the preview; the choice and weight save together with Apply weights. This is a local estimate: it assumes one base Armor point adds one effective Armor point, does not model form/talent Armor multipliers, and does not treat Dodge and Armor as equivalent against every attack. An unreadable native mitigation API makes this calculation unavailable instead of substituting an unverified Armor formula.
 
-Native Forever conversion functions take priority and use the difference for the additional stat point. Where they are unavailable, supported calculations use their verified base coefficient or class/level Vanilla fallback. The fallback crit tables cover levels 1–60; an unavailable weighted conversion prevents applying the result. The compact gear tooltip shows the selected modifiers; the calculation limitations and references are documented here. These conversions are separate from item secondary-stat parsing: item weights remain per **1 percentage point**, and raw rating still receives no guessed conversion.
+Native Forever conversion functions take priority and use the difference for the additional stat point. Where they are unavailable, supported calculations use their verified base coefficient or class/level historical fallback. The level-60 crit/dodge coefficients have been checked against WoWSims Forever; lower levels remain historical fallbacks. The tables cover levels 1–60; an unavailable weighted conversion prevents applying the result. The compact gear tooltip shows the selected modifiers; the calculation limitations and references are documented here. These conversions are separate from item secondary-stat parsing: item weights remain per **1 percentage point**, and raw rating still receives no guessed conversion.
 
-**Spirit** and **MP5** offer a time-in-combat slider. Mana regeneration uses full Spirit regen out of combat, and the chosen casting share and retained regeneration during combat. The retained-regeneration default is read from the active talent configuration when possible, including Paladin Reverence. Both directions use the same factor: `(1 - combat share) + combat share * ((1 - casting share) + casting share * retained regen)`. Spirit's mana-regeneration coefficient uses the current Spirit breakpoint and any selected primary-stat modifiers.
+### WoWSims Forever conversion audit
+
+Checked against commit [bd2f6ae](https://github.com/wowsims/forever/tree/bd2f6ae0a9ef8b5741666c650ebc7149316366a7), using its generated game-data coefficients and executable stat dependencies. WoWSims runs at level 60; its published generated coefficients do not establish the rates at levels 1–59. The values below are unmodified attributes before Kings, selected talents or form effects. All existing level-60 crit/dodge values already matched; their numbers have not been replaced with rounded reciprocals.
+
+| Class | Agility per +1% attack crit | Intellect per +1% spell crit | Dodge percentage points per Agility |
+| --- | ---: | ---: | ---: |
+| Warrior | 20.0000 | — | 0.0500 |
+| Paladin | 19.7628 | 59.8802 | 0.0506 |
+| Hunter | 52.9101 | 60.6061 | 0.0378 |
+| Rogue | 28.9855 | — | 0.0690 |
+| Priest | 20.0000 | 59.5238 | 0.0500 |
+| Shaman | 19.6850 | 59.1716 | 0.0508 |
+| Mage | 19.4553 | 59.5238 | 0.0514 |
+| Warlock | 20.0000 | 60.6061 | 0.0500 |
+| Druid | 20.0000 | 59.8802 | 0.0500 |
+
+Source: [base_stats_auto_gen.go](https://github.com/wowsims/forever/blob/bd2f6ae0a9ef8b5741666c650ebc7149316366a7/sim/core/base_stats_auto_gen.go) and [base_stats.go](https://github.com/wowsims/forever/blob/bd2f6ae0a9ef8b5741666c650ebc7149316366a7/sim/core/base_stats.go). Its parser reads `PlayerExpectedStat` at level 60 and converts fractions to percentage points by multiplying by 100. These coefficients are **not ratings** and must not be divided by 14 again. Dodge uses the class's Agility-to-crit coefficient, doubled for Hunters and Rogues.
+
+The audit also confirms existing base conversions: 2 AP per Strength for Warrior/Paladin/Shaman/Druid and 1 for the other classes; Hunter Agility grants 1 melee AP and 2 ranged AP; Rogue Agility grants 1 melee AP; Agility grants 2 armor; Stamina grants 10 health and Intellect grants 15 mana above their first-20 breakpoints. Shield classes receive 0.05 block value per Strength. Character base crit, base health/mana and racial offsets are not marginal item-stat gains and are not added to these weights.
+
+All currently modeled passive talent coefficients match the snapshot's generated curves, including Champion of the Light at 20/40/60% spell damage. The latest Mental Strength curve is 2% Intellect per rank; existing older-client build handling remains. This does not make the calculator a complete talent simulator. In particular, Demonic Embrace, maximum-resource talents such as Fel Vitality/Survivalist/Improved Reincarnation, racial multipliers and form armor multipliers are not newly modeled by this audit. Maximum-health or maximum-mana bonuses must not be treated as Stamina or Intellect bonuses, which would distort their other contributions.
+
+Armor continues to use the native Forever mitigation API. This snapshot's executable armor calculation still uses the legacy `400 + 85 × attacker level` constant, despite including a separate Forever armor data table. It is therefore not used to override the client. The simulator also does not provide a Spirit-to-health-regeneration model; HP5 remains explicitly estimated below.
+
+**Spirit** and **MP5** offer a time-in-combat slider. Mana regeneration uses full Spirit regen out of combat, and the chosen casting share and retained regeneration during combat. The retained-regeneration default is read from the active talent configuration when possible, including Paladin Reverence. Both directions use the same factor: `(1 - combat share) + combat share * ((1 - casting share) + casting share * retained regen)`. At level 60, [WoWSims mana.go](https://github.com/wowsims/forever/blob/bd2f6ae0a9ef8b5741666c650ebc7149316366a7/sim/core/mana.go) uses `6.25 + Spirit / 8` mana per second, so one extra Spirit gives **0.625 MP5**, with no 50-Spirit mana breakpoint. The flat 6.25 mana/sec base is not an additional Spirit contribution. Lower levels retain the historical 50-Spirit mana fallback because the sim does not establish their coefficient. Selected primary-stat modifiers apply once, including in the reverse MP5 calculation.
 
 Spirit also includes its estimated **Health per 5 seconds** gain multiplied by `1 - combat share`. At 100% combat this health contribution is zero. This term is marked **(estimate)**: Forever's [native API](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/PlayerScriptDocumentation.lua) exposes total health regen without a hypothetical Spirit argument, so the calculator uses the historical Classic health coefficients retained in RatingBuster. They are not verified Forever health coefficients. The estimate follows that helper's executable 50-Spirit breakpoint, integrates the next stat point across it, and applies Kings/Living Spirit once. It uses the reference's HP5 coefficients directly, without adding another standing/sitting multiplier. Table entries explicitly marked as lacking data are omitted; a required unknown health contribution makes calculation unavailable, while a zero HP5 weight or 100% combat does not block the other contributions. You can still enter a Spirit weight manually.
 
@@ -251,6 +275,7 @@ lua tests/test_crit_distribution.lua
 lua tests/test_global_settings.lua
 lua tests/test_external_imports.lua
 lua tests/test_derived_weights.lua
+lua tests/test_forever_conversions.lua
 lua tests/test_calculation_pipeline.lua
 lua tests/test_equipment_sets.lua
 lua tests/test_items.lua

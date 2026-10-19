@@ -5,8 +5,12 @@ local _, FW = ...
 -- Data provenance: class/level Classic tables retained in RatingBuster's
 -- Forever (Camelot) rules, and its Forever spirit/talent conversions:
 -- https://github.com/raethkcj/RatingBuster/blob/905c14184527e0466c85b1d180bcd62d875fd4dd/libs/StatLogic/CamelotLogic.lua
--- Live client conversion APIs take priority. Tables are a labelled Classic
--- fallback, rather than an assumption that Forever shares every coefficient.
+-- Audited against WoWSims Forever's game-data-derived level-60 coefficients:
+-- https://github.com/wowsims/forever/blob/bd2f6ae0a9ef8b5741666c650ebc7149316366a7/sim/core/base_stats_auto_gen.go
+-- All nine existing level-60 crit rows match that snapshot exactly. The sim
+-- does not publish the lower-level rows; those remain historical fallbacks.
+-- Live client conversion APIs take priority at every level.
+FW.ForeverConversionReference = {level=60, revision="bd2f6ae0a9ef8b5741666c650ebc7149316366a7"}
 
 local critPerAgility = {
 	["WARRIOR"] = {
@@ -433,21 +437,31 @@ local function critRate(statIndex, ctx, increment)
     end
     local tableForClass=(statIndex==2 and critPerAgility or spellCritPerIntellect)[ctx.class]
     rate=tableForClass and tableForClass[ctx.level]
-    if finite(rate) then return rate*increment, "Vanilla fallback, " .. ctx.class .. " level " .. ctx.level .. " (RatingBuster)" end
+    if finite(rate) then
+        local source=ctx.level==60 and "WoWSims Forever level 60" or "Vanilla fallback (RatingBuster)"
+        return rate*increment, source .. ", " .. ctx.class
+    end
 end
 local function attackRate(statIndex, ranged, ctx, increment)
     increment=increment or 1
     local rate=marginal(ranged and GetRangedAttackPowerForStat or GetAttackPowerForStat, statIndex, ctx, nil, increment)
     if rate then return rate, "Live client" end
-    if statIndex==1 then return ranged and 0 or strengthAP[ctx.class]*increment, "Forever base conversion (RatingBuster)" end
+    if statIndex==1 then
+        return ranged and 0 or strengthAP[ctx.class]*increment,
+            ctx.level==60 and "WoWSims Forever level 60: Strength to attack power" or "Forever base conversion (RatingBuster)"
+    end
     if statIndex==2 then
-        if ranged then return (ctx.class=="HUNTER" and 2 or ((ctx.class=="WARRIOR" or ctx.class=="ROGUE") and 1 or 0))*increment, "Forever base conversion (RatingBuster)" end
+        if ranged then
+            return (ctx.class=="HUNTER" and 2 or ((ctx.class=="WARRIOR" or ctx.class=="ROGUE") and 1 or 0))*increment,
+                ctx.level==60 and ctx.class=="HUNTER" and "WoWSims Forever level 60: Hunter ranged attack power" or "Forever base conversion (RatingBuster)"
+        end
         if ctx.class=="DRUID" and ctx.live then
             local form=call(GetShapeshiftFormID)
             if not finite(form) then return nil, "Druid form was unavailable." end
             return form==1 and increment or 0, "Vanilla fallback, current druid form"
         end
-        return (ctx.class=="HUNTER" or ctx.class=="ROGUE") and increment or 0, "Forever base conversion (RatingBuster)"
+        return (ctx.class=="HUNTER" or ctx.class=="ROGUE") and increment or 0,
+            ctx.level==60 and "WoWSims Forever level 60: Agility to attack power" or "Forever base conversion (RatingBuster)"
     end
     return 0, "Base conversion; talent stat conversions are not included"
 end
@@ -459,7 +473,8 @@ local function healthRate(ctx, increment)
     local native=finite(rate) and rate>0
     if not native then rate=10 end
     local below=math.max(0, math.min(increment, 20-stamina))
-    return below+(increment-below)*rate, (native and "Live client" or "Vanilla fallback") .. ", first 20 Stamina give one Health each."
+    return below+(increment-below)*rate,
+        (native and "Live client" or ctx.level==60 and "WoWSims Forever level 60" or "Vanilla fallback") .. ", first 20 Stamina give one Health each."
 end
 
 local function manaRate(ctx, increment)
@@ -510,6 +525,7 @@ end
 
 local function sourceLabel(source)
     if not source then return end
+    if source:find("WoWSims Forever",1,true) then return "WoWSims Forever" end
     if source:find("Classic/RatingBuster health estimate",1,true) then return "Classic/RatingBuster health estimate" end
     if source:find("Forever talent conversion",1,true) then return "Verified Forever talent conversion" end
     if source:find("Forever Armor",1,true) then return "Live Forever Armor API" end
@@ -703,19 +719,21 @@ function FW:GetDerivedWeightOptions(key, weights, options)
     if key=="strength" then
         addAttack(1)
         if ctx.class=="WARRIOR" or ctx.class=="PALADIN" or ctx.class=="SHAMAN" then
-            add("blockValue", 0.05*increment, ctx.class=="SHAMAN" and "Vanilla fallback: 20 Strength = 1 shield block value."
+            add("blockValue", 0.05*increment, ctx.level==60 and "WoWSims Forever level 60: 20 Strength = 1 shield block value."
+                or ctx.class=="SHAMAN" and "Vanilla fallback: 20 Strength = 1 shield block value."
                 or "Forever base conversion (RatingBuster)")
         end
     elseif key=="agility" then
         addAttack(2)
-        add("armorBonus", 2*increment, "Vanilla fallback: armor gained from agility is bonus armor.")
+        add("armorBonus", 2*increment, ctx.level==60 and "WoWSims Forever level 60: 2 armor per Agility; scored using bonus armor."
+            or "Vanilla fallback: armor gained from agility is bonus armor.")
         local rate, source=critRate(2, ctx, increment)
         add("meleeCrit", rate, source, "%")
         -- Dodge is a separate conversion: never divide total dodge (which
         -- includes base chance and defense) by agility.
         local fallback=critPerAgility[ctx.class] and critPerAgility[ctx.class][ctx.level]
         add("dodge", fallback and fallback*((ctx.class=="HUNTER" or ctx.class=="ROGUE") and 2 or 1)*increment,
-            "Vanilla fallback dodge table, class and level", "%")
+            ctx.level==60 and "WoWSims Forever level 60: class Agility to dodge dependency" or "Vanilla fallback dodge table, class and level", "%")
     elseif key=="stamina" then
         local rate, source=healthRate(ctx, increment)
         add("health", rate, source)
@@ -761,27 +779,30 @@ function FW:GetDerivedWeightOptions(key, weights, options)
             local spirit=ctx.live and effectiveStat(5)
             if not finite(spirit) or spirit<0 then fail("Current Spirit is unavailable; the regeneration breakpoint cannot be checked.")
             else
-                -- Integrate the next point across the 50-Spirit breakpoint.
-                -- A fractional stat near the breakpoint must not get the
-                -- entire point priced at the rate on either side.
+                -- HP5 retains its historical 50-Spirit interval. Only lower
+                -- levels use that breakpoint for the mana fallback: the
+                -- level-60 Forever simulator uses Spirit/8 mana per second.
                 local below=math.max(0, math.min(increment, 50-spirit))
                 local above=increment-below
-                local base=usesMana and (below*1.25+above*0.625) or 0
+                local foreverMana=ctx.level==60
+                local base=usesMana and (foreverMana and 0.625*increment or below*1.25+above*0.625) or 0
                 local castingMultiplier=(1-casting)+casting*regen
                 local multiplier=(1-combat)+combat*castingMultiplier
                 local effective=base*multiplier
                 result.contextText=result.contextText .. " · " .. number(spirit) .. " Spirit"
                 if usesMana then
-                    if not seenSources["Forever: RatingBuster"] then
-                        result.provenance[#result.provenance+1]="Forever: RatingBuster"
-                        seenSources["Forever: RatingBuster"]=true
+                    local regenSource=foreverMana and "WoWSims Forever level 60 mana regeneration" or "Classic/RatingBuster mana fallback"
+                    if not seenSources[regenSource] then
+                        result.provenance[#result.provenance+1]=regenSource
+                        seenSources[regenSource]=true
                     end
-                    line("Next 1 Spirit = " .. number(base) .. " MP5 before casting reductions (Forever / RatingBuster; breakpoint 50 Spirit).")
+                    local regenRule=foreverMana and "WoWSims Forever level 60; flat 0.625 MP5 per Spirit" or "Classic/RatingBuster fallback; breakpoint 50 Spirit"
+                    line("Next 1 Spirit = " .. number(base) .. " MP5 before casting reductions (" .. regenRule .. ").")
                     line(number(casting*100) .. "% while casting; " .. number(regen*100) .. "% Spirit regeneration retained while casting.")
                     line("Casting-regeneration default: " .. defaults.regenSource .. " Chosen value is shown above.")
                     assume(number(casting*100) .. "% under the casting rule; " .. number(regen*100) .. "% Spirit regeneration retained.")
                     modifier(number(casting*100) .. "% under the casting rule; " .. number(regen*100) .. "% Spirit regeneration retained.")
-                    assume("Before casting reductions, next 1 Spirit gives " .. number(base) .. " MP5 (breakpoint: 50 Spirit).")
+                    assume("Before casting reductions, next 1 Spirit gives " .. number(base) .. " MP5 (" .. regenRule .. ").")
                     assume("Casting-regeneration default: " .. defaults.regenSource)
                 elseif weight("mp5")~=0 then fail("This class does not use mana.") end
                 line(number(combat*100) .. "% in combat; casting share applies during that combat time.")
